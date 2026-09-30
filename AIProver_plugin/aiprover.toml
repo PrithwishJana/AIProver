@@ -1,0 +1,64 @@
+# =============================================================================
+# AIProver configuration -- shared by BOTH skills (claude_code/ and codex/).
+# The ONE file to edit on a new machine. After any edit:  bin/aiprover doctor
+# =============================================================================
+
+[endpoint]
+# ---- WHERE THE MODEL IS ------------------------------------------------------
+# The machine you SSH into (IP or hostname) and the model's address as seen FROM it.
+#
+# CURRENT SERVER (2026-09-21): vLLM job 1011285 on TACC Vista, until ~2026-09-23 08:13 CDT
+#   SSH into  vista.tacc.utexas.edu  (129.114.63.161)      <- the login node
+#   model at  c613-081               (129.114.17.176) : 8055   <- compute node, reachable
+#             only from inside TACC, which is why the SSH hop is needed.
+mode = "direct"   # 2026-09-22: via ~/leanstral_lb.py (127.0.0.1:18600) balancing both Vista servers; was "ssh"
+ssh_host = "vista.tacc.utexas.edu"
+ssh_user = "pjana"
+ssh_port = 22
+remote_host = "c613-081"          # "127.0.0.1" if vLLM runs on ssh_host itself
+remote_port = 8055
+
+# OPTIONAL auto-follow: a file ON ssh_host that the vLLM job writes when it is up
+# (`node=<n> port=<p> job=<id>`). When readable it WINS over remote_host/remote_port, so a server
+# restarted on another node is followed with no edit; when unreadable the fixed address is used.
+server_handoff = "/scratch/11428/pjana/servers/leanstral_step1_d.txt"
+
+# TACC needs MFA, which no script can answer: open ONE ssh master by hand (see README) and name
+# its socket here; every tunnel rides it without prompting. Empty = plain key-based ssh.
+control_socket = "~/.ssh/vista.sock"
+# Extra ssh arguments, e.g. ["-i", "~/.ssh/id_ed25519"].
+ssh_options = []
+
+# The local end of the tunnel. Any free port on THIS machine.
+local_port = 18555
+
+# mode = "direct" only: the server is already reachable at api_base (no SSH).
+api_base = "http://127.0.0.1:18601/v1"
+api_key = "EMPTY"
+# Served model name; empty = the first id /v1/models reports.
+model = ""
+
+
+[runtime]
+# Jobs, per-sample workspaces and the coding agent's Lean scratch project. Must be writable.
+work_root = "~/.aiprover"
+# Concurrent AIProver rollouts on THIS machine (global, across agents). Each holds a Lean
+# server (~1.5 GB) and compiles peak ~5 GB.
+max_parallel = 8
+# Per-rollout wall clock (s). The harness lands its answer by ~3700 s on its own.
+timeout_sec = 5400
+# The harness's turn budget. 100 is the champion's own value.
+max_turns = 100
+
+
+[paths]
+# setup.sh BUILDS whatever is missing at these paths; existing ones are used as they are.
+# A Lean project pinning leanprover/lean4:v4.23.0 + Mathlib v4.23.0 + the Lean REPL.
+lean_project = "~/autoformalization-jtemb/tmpFolder/8d9a729d-dec6-452d-bb90-d63be139ee52/TmpProjDir"
+elan_home = "~/.elan"
+# Python 3.12 venv with mistral-vibe==2.24.2 (the harness's agent loop).
+vibe_venv = "~/vibe_env"
+# Python 3.12 venv with lean-lsp-mcp==0.30.0 (+ leanclient patched for Lean 4.23).
+mcp_venv = "~/mcp_env"
+# Directory holding `rg` (ripgrep).
+rg_dir = "~/.local/bin"

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "lean-lsp": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/skills/aiprover-autoformalize/scripts/aiprover",
+      "args": ["mcp-serve"]
+    }
+  }
+}

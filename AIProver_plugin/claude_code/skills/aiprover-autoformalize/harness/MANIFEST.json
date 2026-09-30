@@ -1,0 +1,14 @@
+{
+ "champion": "hevo_mixed_v1/d00_r00/d01_r04 (round 4, fitness 0.5375 on 509 train problems: 205 solved, 9 faithful-with-sorry, 173 compile-but-unfaithful)",
+ "source": "/home/pjana/runs/hevo_mixed_v1/memory/d00_r00/d01_r04/harness.py",
+ "harness_sha256": "1b6fa629087d5ce8a5d005c70f2ca9371a973561a8a09b176ba0c0e62ab3f91b",
+ "grader_source": "harness_runner/grade_type_correctness.py",
+ "grader_sha256": "a0ca0135bcb35d6413be380fc32771b2da3eb2c18058e798f39ae03cde310328",
+ "model_settings": {
+  "temperature": 1.0,
+  "reasoning_effort": "high",
+  "max_turns": 100,
+  "auto_compact_threshold": 200000
+ },
+ "note": "Byte-identical copy. Do not edit: every number quoted for AIProver was measured with exactly these bytes. `aiprover doctor` verifies the hashes."
+}

@@ -1,0 +1,7 @@
+{
+  "name": "aiprover",
+  "version": "1.0.0",
+  "description": "Proof auto-formalization into Lean 4 with the AIProver agent (fine-tuned Leanstral + evolved hevo harness), plus the lean-lsp MCP tools.",
+  "author": { "name": "PartitionAndProve" },
+  "license": "Proprietary"
+}

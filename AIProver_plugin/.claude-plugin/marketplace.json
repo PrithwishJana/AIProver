@@ -1,0 +1,14 @@
+{
+  "name": "aiprover-local",
+  "description": "Local marketplace for the AIProver proof auto-formalization plugin.",
+  "owner": {
+    "name": "PartitionAndProve"
+  },
+  "plugins": [
+    {
+      "name": "aiprover",
+      "source": "./claude_code",
+      "description": "Proof auto-formalization into Lean 4 with the AIProver agent, plus the lean-lsp MCP tools."
+    }
+  ]
+}
