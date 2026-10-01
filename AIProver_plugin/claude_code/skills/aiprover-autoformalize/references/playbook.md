@@ -241,18 +241,19 @@ For your own small repairs, and as `--hint` material when a sample violates them
 - **Never weaken to compile.** Adding a hypothesis, specialising a type, or dropping a part to
   make a proof go through trades an (a)/(b) failure for a (c) failure.
 
-## 12. Standalone mode: the informal steps without a coding agent
+## 12. The three LLM-backed helpers, and whose LLM answers
 
-`bin/aiprover` can be driven by a person with no Claude Code or Codex. The judgement steps then
-have no frontier model, so three commands offer them on AIProver's own endpoint (an
-OpenAI-compatible chat API; the model is Lean-specialised, so treat the answers as drafts):
-
-| command | what it does | NL analogue in the plugin modes |
+| command | what it does | where it fits |
 |---|---|---|
-| `expand --problem P.txt --out P2.txt` | rewrites P as numbered atomic steps, method and lemmas kept; a critic pass checks method/lemmas/assumptions and the writer revises (`--rounds`) | step 1b, done by the coding agent |
-| `backtranslate FILE.lean` | says in plain English what every declaration of the file states, hypotheses and number types included | judge protocol (c) step 1, done by the coding agent |
-| `ask "question" [--file F.lean]` | one free-form question with a file as context | the agent's own reasoning |
+| `expand --problem P.txt --out P2.txt` | rewrites P as numbered atomic steps, method and lemmas kept; a critic pass checks method/lemmas/assumptions and the writer revises (`--rounds`, default 2) | step 1b |
+| `backtranslate FILE.lean` | says in plain English what every declaration of the file states, hypotheses and number types included, from a context that has never seen T | judge protocol (c), step 1 |
+| `ask "question" [--file F.lean]` | one free-form question with a file as context | anywhere |
 
-Every command has `--dry-run` (prints the prompt). The coding agents are told NOT to call these:
-they are better informal mathematicians than the model behind them.
+`--backend auto` (the default) picks the LLM of the mode you are in, decided from the process
+ancestry: inside a Claude Code session a fresh `claude -p` on your subscription (3-10 s for a
+question or a back-translation, ~1.5 min for `expand` with its critic round); inside Codex a
+fresh `codex exec`; standalone the AIProver model server (a Lean specialist, weaker at informal
+mathematics -- read its drafts). `[helpers]` in `aiprover.toml` or `--backend` forces one. Every
+command has `--dry-run` (prints the prompt and the backend it would use). Nothing is fed anywhere
+automatically: the output is for a reader -- you, or the coding agent.
 

@@ -89,9 +89,12 @@ $AIP status | list | cancel JOB
 - `extract` isolates a stuck step: point it at the `sorry` standing for the step and Lean's
   `extract_goal` writes the lemma with the exact local context as binders (universes, instances,
   earlier `have`s included). Paste it above the theorem, close the step with it, delegate it alone.
-- `expand`, `backtranslate`, `ask` exist for STANDALONE use (they ask AIProver's own model). You
-  are a stronger informal mathematician than that model: do steps 1b and the judge protocol
-  yourself; do not call these.
+- `expand`, `backtranslate`, `ask` call an LLM. Inside this session that LLM is YOUR OWN model in a
+  fresh headless process (`--backend auto`), so they cost your tokens and know nothing of this
+  conversation. Use that: `$AIP backtranslate FILE.lean` IS the blind back-translation of the
+  judge protocol -- a reader that has never seen T cannot be anchored by it. `expand` is a
+  convenience for step 1b when you prefer not to write the steps out yourself. Standalone users
+  get AIProver's own model instead.
 
 **lean-lsp MCP tools** (`lean_diagnostic_messages`, `lean_goal`, `lean_multi_attempt`,
 `lean_run_code`, `lean_local_search`, `lean_loogle`, `lean_leansearch`, `lean_hover_info`,
@@ -190,7 +193,8 @@ the text meant rather than what the Lean says.
 **(c) Semantic correctness.**
 1. **Blind back-translation.** From the Lean alone -- every `def`, `structure`, instance argument,
    binder, hypothesis and conclusion -- write in plain English what T̂ asserts. Unfold local
-   definitions. Do this BEFORE comparing with T. (With several candidates, or for the final gate,
+   definitions. `$AIP backtranslate FILE.lean` does this in a fresh process of your own model that
+   has not read T; prefer it to doing it in this context. Do this BEFORE comparing with T. (With several candidates, or for the final gate,
    delegate this step to a fresh subagent given ONLY the Lean file, so it cannot be anchored by T.)
 2. **Compare clause by clause** with T (read P too, since it can fix the meaning of notation):
    - every part of a multi-part theorem present, each with its own hypotheses;

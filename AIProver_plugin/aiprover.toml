@@ -62,3 +62,19 @@ vibe_venv = "~/vibe_env"
 mcp_venv = "~/mcp_env"
 # Directory holding `rg` (ripgrep).
 rg_dir = "~/.local/bin"
+
+
+[helpers]
+# `expand`, `backtranslate` and `ask` need an LLM. "auto" picks the LLM of the mode you are in:
+#   inside a Claude Code session  -> `claude -p`   (your Claude subscription / credentials)
+#   inside a Codex session        -> `codex exec`  (your Codex subscription)
+#   standalone                    -> the AIProver model server above
+# Set "aiprover", "claude" or "codex" to force one. --backend on the command line wins.
+backend = "auto"
+# Model for `claude -p` ("" = the Claude Code default). E.g. "opus", "sonnet", or a full id.
+claude_model = ""
+# Sandbox for `codex exec` answers (no commands are run; read-only suffices).
+codex_sandbox = "read-only"
+# Seconds to wait for one answer.
+timeout_sec = 900
+

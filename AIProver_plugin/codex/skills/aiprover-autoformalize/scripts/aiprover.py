@@ -16,9 +16,12 @@ for up to 100 turns -- not a single completion. A call takes minutes (median ~13
     aiprover probe FILE.lean                 statement sanity: counterexample search + automation closers
     aiprover search QUERY [--lib cslib|mathlib|all|loogle|leansearch|leandex]   library search
     aiprover extract FILE.lean --line N      the goal at a `sorry` as a standalone lemma (Lean writes the binders)
-    aiprover expand --problem P.txt [--out P2.txt]   standalone: AIProver's model rewrites the proof as explicit steps
-    aiprover backtranslate FILE.lean         standalone: AIProver's model says in English what the Lean states
-    aiprover ask "question" [--file F.lean]  standalone: one free-form question to AIProver's model
+    aiprover expand --problem P.txt [--out P2.txt]   rewrite the proof as explicit steps (writer + critic)
+    aiprover backtranslate FILE.lean         say in plain English what each declaration of the Lean states
+    aiprover ask "question" [--file F.lean]  one free-form question
+      These three ask an LLM. --backend aiprover|claude|codex|auto (default auto): inside a Claude Code
+      session `claude -p` answers on your Claude subscription, inside Codex `codex exec` on yours,
+      standalone the AIProver model server. [helpers] in aiprover.toml sets the default.
     aiprover render ...                      print the problem.txt a submit would send
     aiprover tunnel [up|status|down]         the SSH tunnel to the model server
     aiprover workspace                       path of the Lean scratch project for YOUR files
@@ -97,6 +100,7 @@ class Config:
         self.ep = raw.get("endpoint", {})
         self.rt = raw.get("runtime", {})
         self.paths = raw.get("paths", {})
+        self.helpers = raw.get("helpers", {})
 
     def p(self, key: str) -> Path:
         v = self.paths.get(key, "")
@@ -982,15 +986,122 @@ def cmd_extract(cfg: Config, a: argparse.Namespace) -> int:
 
 
 # =============================================================================
-# STANDALONE INFORMAL HELPERS -- AIProver's own model as writer and critic (no coding agent)
+# INFORMAL HELPERS -- three moves that need an LLM, answered by whichever LLM this mode has
 # =============================================================================
-# In the plugin modes the coding agent does these in context: the rigor pass (SKILL step 1b)
-# and the blind back-translation (judge protocol) are Claude Code's or Codex's own model at
-# work, with no extra key. Standalone there is no frontier model, so the same moves are offered
-# on the AIProver endpoint, an OpenAI-compatible chat API. That model is Lean-specialised and
-# its informal mathematics is weaker than a frontier model's, so these commands PRINT drafts for
-# the human to read; nothing is fed anywhere automatically.
+# The rigor pass (make the informal proof explicit), the blind back-translation of a Lean file
+# and a free-form question. Backends:
+#   claude    `claude -p` -- a FRESH headless Claude Code process on the user's own Claude
+#             subscription/credentials. Default inside a Claude Code session.
+#   codex     `codex exec` -- likewise on the user's Codex subscription. Default inside Codex.
+#   aiprover  the AIProver model server (OpenAI-compatible chat). Default standalone. That
+#             model is Lean-specialised and weaker at informal mathematics; read its drafts.
+# A fresh process is a feature for `backtranslate`: it has not seen the informal theorem, so
+# its reading of the Lean cannot be anchored by it (the judge protocol's point).
+# Nothing here feeds an answer anywhere automatically; the commands PRINT for a reader.
 HELPER_TIMEOUT = 900          # one reasoning_effort=high answer can take minutes
+HELPER_BACKENDS = ("auto", "aiprover", "claude", "codex")
+
+
+def _hosting_agent() -> str | None:
+    """`codex` or `claude` if this process runs under one of them, else None.
+
+    Decided from the process ancestry (Linux /proc): the NEAREST ancestor that is a `codex` or
+    `claude` executable names the session we are inside of. Environment markers alone cannot,
+    because a Codex session started from a Claude Code shell inherits Claude's variables
+    (measured: both sets present, Claude's would win wrongly). Falls back to the markers where
+    /proc is unavailable.
+    """
+    pid = os.getpid()
+    for _ in range(40):
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+            if ppid <= 1:
+                break
+            with open(f"/proc/{ppid}/cmdline", "rb") as f:
+                argv0 = f.read().split(b"\0", 1)[0].decode(errors="replace")
+        except (OSError, ValueError, IndexError):
+            break
+        base = os.path.basename(argv0)
+        if base == "codex":
+            return "codex"
+        if base == "claude" or "/claude/versions/" in argv0 or "claude-code" in argv0:
+            return "claude"
+        pid = ppid
+    if os.environ.get("CODEX_THREAD_ID") or os.environ.get("CODEX_SANDBOX"):
+        return "codex"
+    if os.environ.get("CLAUDECODE") or os.environ.get("CLAUDE_CODE_ENTRYPOINT"):
+        return "claude"
+    return None
+
+
+def helper_backend(cfg: Config, requested: str | None = None) -> str:
+    """Which LLM answers: the flag, else [helpers].backend, else the session we are inside of."""
+    choice = (requested or str(cfg.helpers.get("backend", "auto")) or "auto").strip().lower()
+    if choice not in HELPER_BACKENDS:
+        raise AIProverError(f"unknown helper backend {choice!r}; one of {HELPER_BACKENDS}")
+    if choice != "auto":
+        return choice
+    return _hosting_agent() or "aiprover"
+
+
+def _helper_timeout(cfg: Config) -> int:
+    return int(cfg.helpers.get("timeout_sec", HELPER_TIMEOUT))
+
+
+def _claude_answer(cfg: Config, prompt: str) -> str:
+    exe = shutil.which("claude")
+    if not exe:
+        raise AIProverError("backend claude: `claude` CLI not on PATH (use --backend aiprover, or install Claude Code)")
+    # The prompt goes in over STDIN: `--disallowedTools` takes a list of names, so a positional
+    # prompt after it would be read as more tool names (measured: "Permission deny rule 'with'
+    # matches no known tool"), and stdin also has no ARG_MAX limit for a long Lean file.
+    cmd = [exe, "-p", "--output-format", "text", "--max-turns", "2", "--permission-mode", "default",
+           "--disallowedTools", "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task,Agent"]
+    model = str(cfg.helpers.get("claude_model", "") or "").strip()
+    if model:
+        cmd += ["--model", model]
+    env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=_helper_timeout(cfg),
+                           input="Answer directly in this reply; use no tools.\n\n" + prompt,
+                           cwd=str(cfg.work_root), env=env)
+    except subprocess.TimeoutExpired:
+        raise AIProverError(f"backend claude: no answer within {_helper_timeout(cfg)}s") from None
+    if r.returncode != 0 or not r.stdout.strip():
+        raise AIProverError(f"backend claude: rc={r.returncode}: {(r.stderr or r.stdout)[-400:].strip()}")
+    return r.stdout.strip()
+
+
+def _codex_answer(cfg: Config, prompt: str) -> str:
+    exe = shutil.which("codex") or next(iter(sorted(Path.home().glob(
+        ".vscode-server/extensions/openai.chatgpt-*/bin/linux-*/codex"), reverse=True)), None)
+    if not exe:
+        raise AIProverError("backend codex: `codex` CLI not found (use --backend aiprover, or install Codex)")
+    work = cfg.work_root / "helpers"
+    work.mkdir(parents=True, exist_ok=True)
+    out = work / f"codex_{os.getpid()}_{int(time.time())}.txt"
+    sandbox = str(cfg.helpers.get("codex_sandbox", "read-only") or "read-only")
+    cmd = [str(exe), "exec", "--skip-git-repo-check", "--sandbox", sandbox, "-C", str(work),
+           "-o", str(out), "Answer directly in this reply; run no commands and edit no files.\n\n" + prompt]
+    try:   # `codex exec` blocks on an open stdin, hence DEVNULL
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=_helper_timeout(cfg),
+                           stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        raise AIProverError(f"backend codex: no answer within {_helper_timeout(cfg)}s") from None
+    ans = out.read_text(errors="replace").strip() if out.is_file() else ""
+    out.unlink(missing_ok=True)
+    if r.returncode != 0 or not ans:
+        raise AIProverError(f"backend codex: rc={r.returncode}: {(r.stderr or r.stdout)[-400:].strip()}")
+    return ans
+
+
+def llm_answer(cfg: Config, prompt: str, backend: str, *, max_tokens: int = 6000) -> str:
+    if backend == "claude":
+        return _claude_answer(cfg, prompt)
+    if backend == "codex":
+        return _codex_answer(cfg, prompt)
+    return chat(cfg, prompt, max_tokens=max_tokens)
 
 EXPAND_WRITER = """You prepare an informal proof for a formalization system that follows the text literally: every \
 gap in the text becomes a gap in the formal proof.
@@ -1096,20 +1207,24 @@ def cmd_expand(cfg: Config, a: argparse.Namespace) -> int:
     thm, prf = _problem_parts(a)
     if not prf:
         raise AIProverError("the proof block is empty: nothing to expand (statement-only problem)")
+    be = helper_backend(cfg, a.backend)
     if a.dry_run:
+        print(f"(backend would be: {be})")
         print(EXPAND_WRITER.format(theorem=thm, proof=prf))
         return 0
-    expanded = _proof_block(chat(cfg, EXPAND_WRITER.format(theorem=thm, proof=prf)))
+    print(f"(backend: {be})", file=sys.stderr)
+    expanded = _proof_block(llm_answer(cfg, EXPAND_WRITER.format(theorem=thm, proof=prf), be))
     verdict = "(not checked)"
     for rnd in range(max(0, a.rounds - 1)):
-        crit = chat(cfg, EXPAND_CRITIC.format(theorem=thm, proof=prf, expanded=expanded),
-                    max_tokens=2000)
-        verdict = crit.splitlines()[0].strip() if crit else "(no answer)"
+        crit = llm_answer(cfg, EXPAND_CRITIC.format(theorem=thm, proof=prf, expanded=expanded), be,
+                          max_tokens=2000)
+        verdict = next((l.strip() for l in crit.splitlines() if "VERDICT" in l.upper()),
+                       crit.splitlines()[0].strip() if crit else "(no answer)")
         if "ISSUES" not in verdict.upper():
             break
         print(f"[round {rnd + 1}] critic: {' '.join(crit.split())[:400]}", file=sys.stderr)
-        expanded = _proof_block(chat(cfg, EXPAND_REFINE.format(
-            theorem=thm, proof=prf, expanded=expanded, issues=crit)))
+        expanded = _proof_block(llm_answer(cfg, EXPAND_REFINE.format(
+            theorem=thm, proof=prf, expanded=expanded, issues=crit), be))
     out = (f"<informal_theorem>\n{thm}\n</informal_theorem>\n\n"
            f"<informal_proof>\n{expanded}\n</informal_proof>\n")
     if a.out:
@@ -1127,10 +1242,13 @@ def cmd_expand(cfg: Config, a: argparse.Namespace) -> int:
 def cmd_backtranslate(cfg: Config, a: argparse.Namespace) -> int:
     lean = Path(a.file).expanduser().read_text(errors="replace")
     prompt = BACKTRANSLATE.format(lean=lean)
+    be = helper_backend(cfg, a.backend)
     if a.dry_run:
+        print(f"(backend would be: {be})")
         print(prompt)
         return 0
-    print(chat(cfg, prompt))
+    print(f"(backend: {be})", file=sys.stderr)
+    print(llm_answer(cfg, prompt, be))
     sys.stdout.flush()
     print("\nCompare each paragraph with the informal theorem clause by clause (SKILL.md, judge "
           "protocol (c)). This is the model's reading of the Lean, not a verdict.", file=sys.stderr)
@@ -1142,10 +1260,13 @@ def cmd_ask(cfg: Config, a: argparse.Namespace) -> int:
     if a.file:
         q += "\n\nContext file `" + Path(a.file).name + "`:\n```lean\n" + \
              Path(a.file).expanduser().read_text(errors="replace") + "\n```\n"
+    be = helper_backend(cfg, a.backend)
     if a.dry_run:
+        print(f"(backend would be: {be})")
         print(q)
         return 0
-    print(chat(cfg, q, max_tokens=a.max_tokens))
+    print(f"(backend: {be})", file=sys.stderr)
+    print(llm_answer(cfg, q, be, max_tokens=a.max_tokens))
     return 0
 
 
@@ -2180,23 +2301,27 @@ def main(argv: list[str] | None = None) -> int:
     ex.add_argument("--name", help="lemma name (default <theorem>_step_L<line>)")
     ex.add_argument("--json", action="store_true")
 
-    xp = sub.add_parser("expand", help="standalone: AIProver's model rewrites the informal proof as "
-                                      "explicit numbered steps (method and lemmas kept), with a "
-                                      "critique round; the coding agents do this themselves")
+    be_help = ("which LLM answers: auto (default) = claude inside a Claude Code session, codex inside "
+               "Codex, else the AIProver model server; [helpers].backend in aiprover.toml overrides")
+    xp = sub.add_parser("expand", help="rewrite the informal proof as explicit numbered steps (method "
+                                      "and lemmas kept), with a critique round")
     _problem_args(xp)
     xp.add_argument("--rounds", type=int, default=2, help="writer + (rounds-1) critic/refine passes")
     xp.add_argument("--out", help="write a complete problem file (theorem unchanged, proof expanded)")
+    xp.add_argument("--backend", choices=HELPER_BACKENDS, help=be_help)
     xp.add_argument("--dry-run", action="store_true", help="print the prompt, call nothing")
 
-    bt = sub.add_parser("backtranslate", help="standalone: AIProver's model states in plain English "
-                                             "what each declaration of a Lean file says (judge aid)")
+    bt = sub.add_parser("backtranslate", help="state in plain English what each declaration of a "
+                                             "Lean file says, from a fresh context (judge aid)")
     bt.add_argument("file")
+    bt.add_argument("--backend", choices=HELPER_BACKENDS, help=be_help)
     bt.add_argument("--dry-run", action="store_true")
 
-    ak = sub.add_parser("ask", help="standalone: one free-form question to AIProver's model")
+    ak = sub.add_parser("ask", help="one free-form question to the LLM of this mode")
     ak.add_argument("question")
     ak.add_argument("--file", help="a Lean file to include as context")
     ak.add_argument("--max-tokens", type=int, default=4000)
+    ak.add_argument("--backend", choices=HELPER_BACKENDS, help=be_help)
     ak.add_argument("--dry-run", action="store_true")
 
     t = sub.add_parser("tunnel")

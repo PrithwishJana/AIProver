@@ -102,10 +102,10 @@ Needs: Linux, Python 3.12, git, curl, ~10 GB disk (Mathlib), `claude` and/or `co
 
 | path | what |
 |---|---|
-| `aiprover.toml` | the one config: endpoint, paths, concurrency |
+| `aiprover.toml` | the one config: endpoint, paths, concurrency, `[helpers]` (which LLM answers `expand`/`backtranslate`/`ask`) |
 | `setup.sh` | idempotent provisioning + install into both agents + verification |
 | `STARTUP.md` | the runbook: what each check means and how to fix it; details of every setup step |
-| `bin/aiprover` | the CLI: `doctor`, `submit`/`wait`/`result` jobs, `check`, `probe`, `search`, `extract`, `expand`/`backtranslate`/`ask` (standalone), `tunnel`, `mcp-serve` |
+| `bin/aiprover` | the CLI: `doctor`, `submit`/`wait`/`result` jobs, `check`, `probe`, `search`, `extract`, `expand`/`backtranslate`/`ask` (LLM-backed, backend per mode), `tunnel`, `mcp-serve` |
 | `claude_code/` | Claude Code plugin: `skills/aiprover-autoformalize/` + `.mcp.json` (lean-lsp) |
 | `codex/` | Codex skill (same scripts and harness; Codex-specific SKILL.md) |
 | `…/SKILL.md` | the procedure: delegate → judge (a)–(d) → decompose → weave → final gate |
@@ -122,7 +122,7 @@ Needs: Linux, Python 3.12, git, curl, ~10 GB disk (Mathlib), `claude` and/or `co
 | `aiprover probe FILE` | statement sanity before judging: every theorem's proof is replaced by `plausible` (random counterexample search) and the closers `decide simp omega norm_num aesop grind` are tried on each statement alone. `COUNTEREXAMPLE` = the statement is false as written, so (c) already fails. | `scripts/aiprover.py`, SKILL step 3/4a, playbook §8 |
 | `aiprover search WORDS` | declarations + docstrings of cslib (default) and Mathlib (`--lib`), for the concept when the name is unknown; prints the exact `import` line. `--lib loogle|leansearch|leandex` wrap the hosted indexes for standalone use, each answer carrying the Mathlib-version caveat | `scripts/aiprover.py`, playbook §10 |
 | `aiprover extract FILE --line N` | the goal at a `sorry` as a standalone lemma, binders written by Lean's `extract_goal` (context, instances, universes, earlier `have`s); the second rung of the escalation ladder | `scripts/aiprover.py`, SKILL step 4d, playbook §9 |
-| `aiprover expand` / `backtranslate` / `ask` | standalone mode only: the rigor pass (writer + critic rounds), the blind back-translation of a Lean file, and a free-form question, all answered by AIProver's own model over its OpenAI-compatible endpoint. In the plugin modes the coding agent does these itself | `scripts/aiprover.py`, playbook §12 |
+| `aiprover expand` / `backtranslate` / `ask` | the rigor pass (writer + critic rounds), the blind back-translation of a Lean file, and a free-form question. `--backend auto` uses the LLM of the mode you are in: a fresh `claude -p` inside Claude Code (your subscription), a fresh `codex exec` inside Codex, the AIProver model server standalone; `[helpers]` in `aiprover.toml` configures it | `scripts/aiprover.py`, `aiprover.toml`, playbook §12 |
 | `lean_local_search` fix | its ripgrep leg never saw the libraries (both projects reach them through a `.lake/packages` symlink ripgrep does not follow); `setup.sh venvs` patches `--follow` in, `doctor` checks it. Mathlib AND cslib names are now found by prefix, for Claude Code, Codex and the AIProver harness alike. | `setup.sh`, doctor |
 | `--hint-file` | longer resubmission guidance (error + goal state + confirmed lemma names) | `submit` |
 | skill procedure | step 1b makes P explicit before delegation; step 3 probes before judging; step 4d is a numbered ladder (structured hint, extract the stuck step as a lemma via `lean_goal`, split, only then prove by hand); tactic rules that protect (d) | `SKILL.md`, playbook §7-§11 |

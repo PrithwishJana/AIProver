@@ -14,6 +14,36 @@ packaged so it can be used in three ways:
 Everything lives in [`AIProver_plugin/`](AIProver_plugin/). The model itself runs on a GPU server
 you point the plugin at; the harness, the Lean toolchain and the tools run on your machine.
 
+## How it works
+
+Four parties take part, and the division of labour is fixed: judgement stays with the strongest
+model available, Lean work goes to the specialist.
+
+| party | runs where | does |
+|---|---|---|
+| **You** | your terminal | supply the theorem and its proof in the two tagged blocks; in standalone mode you are also the judge |
+| **Coding agent** (Claude Code or Codex, on your own subscription) | your machine | reads the text, rewrites the proof as explicit steps, decides what to delegate, judges every candidate for faithfulness, decomposes, weaves, and gates the final file. Never grinds through tactic search itself |
+| **AIProver** (the Leanstral-class prover inside its evolved harness) | the GPU server | turns a problem into a Lean file: writes, compiles, searches Mathlib and cslib, reads goals and repairs, for up to 100 turns per call. Returns candidates; cannot be trusted to judge its own statement |
+| **Mechanical checks** (`check`, `probe`, lean-lsp) | your machine | kernel-level compile and completeness, counterexample search on statements, goals and diagnostics. Decide (a) and (b); screen (c) |
+
+For the example above, in Claude Code: the agent runs `doctor`, writes the problem file, expands
+the three-line proof into numbered steps (base case, inductive step, the inner commutation
+argument spelled out), and submits the whole problem with four samples. AIProver returns, say,
+two compiling files. The agent probes both (no counterexample), back-translates the statement
+of each in a fresh context and compares it with the text clause by clause: a sample stating the
+result for a commutative group has over-generalised the hypothesis and is rejected; the other
+states exactly "if ab = ba then (ab)^n = a^n b^n" and proves it by induction with a `have` for
+the inner lemma, so it passes (c) and (d). `check` certifies it, and the agent returns the file.
+Had neither passed, the agent would freeze a skeleton (the statement, the inner lemma as a
+`sorry`), submit the lemma and the main step as separate jobs with the statements fixed, extract
+any stuck step as a lemma of its own, weave the proofs back and gate the result.
+
+Standalone, the same loop runs with you in the agent's seat: `expand` and `backtranslate` give
+you the written-out proof and the plain-English reading, `probe` and `check` the mechanical
+verdicts, `search` and `extract` the library lookups and the lemma extraction. These three
+LLM-backed helpers always use the model of the mode you are in: Claude Code's or Codex's on your
+subscription inside a session, the AIProver server when standalone.
+
 ## 1. Set up
 
 Follow [`AIProver_plugin/README.md`](AIProver_plugin/README.md) ("Quick start"). In short:
@@ -72,8 +102,11 @@ Pieces of a larger problem can be fixed in Lean: `--context defs.lean` (declarat
 must contain verbatim) and `--lean-statement stmt.lean` (the exact statement to prove), plus
 `--hint`/`--hint-file` for guidance. `bin/aiprover --help` and `submit --help` list everything.
 Judging that the Lean says what the text says is yours in this mode: `check` and `probe` are
-mechanical, and `expand`/`backtranslate`/`ask` are drafts from AIProver's own model (a Lean
-specialist, not a frontier model) to help you read, not verdicts.
+mechanical, and `expand`/`backtranslate`/`ask` are drafts to help you read, not verdicts. They
+are answered by the LLM of the mode you are in (`--backend auto`): standalone, that is AIProver's
+own model over the server, a Lean specialist rather than a frontier model; inside a Claude Code or
+Codex session it is that agent's model on your subscription. `[helpers]` in `aiprover.toml` or
+`--backend aiprover|claude|codex` overrides.
 
 ### With Claude Code
 
