@@ -184,6 +184,22 @@ def mathlib_source() -> str | None:
     return None
 
 
+def cslib_source() -> str | None:
+    """The cslib .lean sources (the Lean library for Computer Science), or None.
+
+    None unless the package is BUILT into this project -- its oleans must be on LEAN_PATH, or
+    an `import Cslib.X` the prompt invited would fail to resolve. Same two candidates as
+    mathlib_source(), for the same reason.
+    """
+    for cand in (MATHLIB / ".lake/packages/cslib", PROJECT / ".lake/packages/cslib"):
+        try:
+            if (cand / "Cslib").is_dir() and (cand / ".lake/build/lib/lean/Cslib.olean").is_file():
+                return str(cand / "Cslib")
+        except OSError:
+            continue
+    return None
+
+
 def _read_text(path: Path, limit: int = 400_000) -> str:
     """Never raises: the agent has a shell and may write anything, or nothing."""
     try:
@@ -1167,7 +1183,8 @@ TASK = ("Read problem.txt in your working directory. It holds an `<informal_theo
         "`native_decide`, a declared `axiom`, `sorryAx`, `Lean.ofReduceBool`, "
         "`@[implemented_by]`, an `unsafe` declaration, `set_option maxHeartbeats 0` or "
         "`debug.skipKernelTC`, and any `import` whose root is not Mathlib/Std/Batteries/"
-        "Aesop/Init. `native_decide` is the one that costs runs here: it is not a slower-but-"
+        f"Aesop/Init{'/Cslib' if cslib_source() else ''}. `native_decide` is the one that "
+        "costs runs here: it is not a slower-but-"
         "acceptable `decide`, it is a zero. If `decide` will not finish, prove the statement "
         "with lemmas rather than deciding it.\n"
         f"- The Mathlib search tools are withheld once you have searched many times and "
@@ -1230,6 +1247,16 @@ TASK = ("Read problem.txt in your working directory. It holds an `<informal_theo
            "never run `find /`.\n" if mathlib_source() else
            "- Do not search the filesystem for Mathlib source; use the Lean search tools "
            "below, which read this project's own Mathlib.\n")
+        # Existence-checked like the Mathlib line above: this bullet appears only when the
+        # cslib package is built into the project, so the prompt never advertises an import
+        # that would fail to resolve.
+        + (f"- cslib, the Lean library for Computer Science, is installed too (pinned to this "
+           "toolchain): lambda calculus, combinatory logic, labelled transition systems and "
+           "bisimulation, CCS, linear logic. Use it only when the informal theorem is about such "
+           "notions; otherwise Mathlib alone. `import Cslib` loads only a few modules, so import "
+           "the module a search hit lives in: a hit in `.lake/packages/cslib/Cslib/A/B.lean` is "
+           f"`import Cslib.A.B`. `{MCP_ALIAS}_lean_local_search` covers cslib as well as "
+           f"Mathlib, and its sources are at {cslib_source()}.\n" if cslib_source() else "")
         # Named with the alias prefix they are actually PUBLISHED under: MCP tool names are
         # always f"{alias}_{name}" (core/tools/mcp/tools.py), so naming them bare here would
         # invite calls to tools that do not exist under that name.
@@ -2101,7 +2128,11 @@ DISQUALIFIERS: tuple[tuple[re.Pattern, str], ...] = (
 # Import roots the graded file may use. Anything else could resolve to a module built on the
 # writable mount, so the runner treats it as a disqualifier too.
 IMPORT_ROOTS = ("Mathlib", "Init", "Std", "Batteries", "Aesop", "Qq", "ImportGraph",
-                "ProofWidgets", "Plausible", "LeanSearchClient", "Cli")
+                "ProofWidgets", "Plausible", "LeanSearchClient", "Cli",
+                # cslib is a pinned dependency of the project (setup/lean_project/), built into
+                # the same read-only packages tree as Mathlib, so an import of it resolves to
+                # prebuilt oleans exactly as Mathlib's do.
+                "Cslib")
 _IMPORT_LINE = re.compile(r"^\s*import\s+([A-Za-z_][\w.]*)", re.M)
 
 
@@ -3415,6 +3446,8 @@ def selftest(api_base: str = "unused") -> int:
                 str(ANSWER) in TASK and ANSWER.parent.is_dir())
             checks["prompt states no absent mathlib"] = (
                 mathlib_source() is None or Path(mathlib_source()).is_dir())
+            checks["prompt names cslib iff it is built"] = (
+                ("import Cslib.A.B" in TASK) == bool(cslib_source()))
         checks["no duplicate tools"] = not cfg.tools and not cfg.disabled_tools
         checks["all mcp tools"] = "--disable-tools" not in cfg.mcp_servers[0].args
         print(f"agent        : {cfg.agent}, {len(cfg.instructions)} char prompt, "
@@ -3467,6 +3500,7 @@ def main() -> int:
         # parent, and under local execution none of those paths exist.
         print(f"answer   : {ANSWER}")
         print(f"mathlib  : {mathlib_source()}")
+        print(f"cslib    : {cslib_source()}")
         print(f"hooks    : {'on' if HOOKS_ENABLED else 'off'} "
               f"(gate after {GATE_FREE_SEARCHES} searches, "
               f"{VERIFY_MAX_DENIALS} delivery denials, "

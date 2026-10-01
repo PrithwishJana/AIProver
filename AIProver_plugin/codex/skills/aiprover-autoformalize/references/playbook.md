@@ -123,12 +123,136 @@ job 2026...-whole  (theorem+proof)  counts: {'verified': 2, 'sorry': 1, 'error':
 ## 5. Small repairs you should do yourself
 
 It is cheaper to fix these directly than to resubmit: a missing `open`/namespace, a renamed
-Mathlib lemma (`lean_local_search` / `lean_loogle` to find the 4.23 name), a universe or
-implicit-argument annotation, a duplicated helper name between woven pieces, and weaving glue
-(`exact partK ...`). Anything that needs real proof search, delegate.
+Mathlib lemma (`lean_local_search` / `lean_loogle` to find the 4.23 name, `$AIP search` when you
+know the concept but not the name), a universe or implicit-argument annotation, a duplicated
+helper name between woven pieces, and weaving glue (`exact partK ...`). For one routine goal,
+`lean_hammer_premise` / `lean_state_search` at the position return candidate lemmas and
+`lean_multi_attempt` tries several closers in one call. Anything that needs real proof search,
+delegate.
 
-## 6. Lean / Mathlib version
+## 6. Lean / Mathlib / cslib versions
 
-Lean `v4.23.0`, Mathlib `v4.23.0`. Hosted search tools (`lean_leansearch`, `lean_leanfinder`,
-`lean_loogle`) may return names from a newer Mathlib. Confirm any name with `lean_local_search`
-or `lean_hover_info` before relying on it. `grind` exists on 4.23. `native_decide` is forbidden.
+Lean `v4.23.0`, Mathlib `v4.23.0`, cslib at its last Lean-4.23.0 commit (`cd368e6`, 2025-09-15:
+29 modules -- lambda calculus named and locally nameless, STLC safety, combinatory logic with
+confluence, LTS with (weak, sw) bisimulation and trace equivalence, CCS, classical linear logic
+with cut elimination, reduction systems). Everything compiles with ONE toolchain. Hosted search
+tools (`lean_leansearch`, `lean_leanfinder`, `lean_loogle`) may return names from a newer
+Mathlib, and cslib on GitHub today has ~250 modules on a newer Lean: neither can be imported
+here. Confirm any name with `lean_local_search` or `lean_hover_info` (they read this project's
+own libraries) before relying on it. `grind` exists on 4.23. `native_decide` is forbidden.
+
+## 7. Make P explicit before delegating (the rigor pass)
+
+AIProver follows P as written. Informal proofs in these datasets routinely say "similarly for
+the other direction", "clearly", "by induction" (hypothesis unstated), "the usual argument",
+"by cases" (cases unlisted), or lean on a convention the reader is assumed to know. Each of
+those is a step AIProver must invent -- and inventing is where it drifts from P or stalls.
+
+Before step 2, rewrite P as numbered atomic steps. For each step name what justifies it (which
+hypothesis, which earlier step, which named fact, induction on what). Spell out every case of
+a case split and both directions of an "iff". Pin the ambient types ("all variables are
+integers", "subgroup of G") and what named relations mean for these objects. Keep P's method
+and its intermediate lemmas exactly as P has them -- (d) is judged against the ORIGINAL P --
+and keep the original beside your expansion so you can judge against it.
+
+Send the expansion as the `<informal_proof>` block (or `--proof-text`). The theorem text is
+never rewritten; only the proof is expanded.
+
+## 8. Reading `probe`
+
+```
+probe  s2.lean  (3 statement(s), 4.1s)
+  part1: COUNTEREXAMPLE  --  a := 1 ; i := 0 ; j := 1 ; issue: 1 = 0 does not hold ; (0 shrinks)
+  part2: no counterexample found  --  random testing passed; this proves nothing
+      closed by automation alone: simp, omega  -> is the statement narrowed, specialised or trivial?
+  part3: untestable  --  no sampling/decidability instances for this statement
+```
+- `COUNTEREXAMPLE`: the statement is false as written. T is a true theorem, so the formal
+  statement lost a hypothesis, widened a quantifier, used ℕ where T means ℤ/ℚ/ℝ (truncated
+  subtraction, floor division), or placed a cast wrongly. Fix the statement; do not touch the
+  proof yet. The witness tells you which variable to look at.
+- `closed by automation alone`: a statement that `simp`/`decide`/`omega`/... prove outright
+  carries no content for AIProver to be faithful to. For a lemma that P treats as routine that is
+  fine; for a theorem part or a lemma P proves with an argument, suspect narrowing or
+  specialisation (failure modes 2 and 6 in §2) and compare against T clause by clause.
+- `untestable`: abstract carriers, undecidable relations, or no sampler -- no information.
+- `no counterexample found`: 100 random tests passed. It is not evidence of (c); go on to judge.
+- `not probed`: a pattern-matching proof (no `:=`) -- rewrite it with `:= by ...` if you want it
+  probed, or judge by hand.
+Probe the skeleton (step 4a) as well as every candidate: a false lemma statement in a frozen
+skeleton wastes every job submitted against it.
+
+## 9. A stuck step becomes a lemma (the extraction recipe)
+
+When a piece fails twice at the same place:
+1. Open the best sample's file in the workspace (`$AIP workspace --new NAME`, paste it) and
+   replace the failing step by `sorry`, so the file elaborates up to that point.
+2. `$AIP extract FILE.lean --line <line of that sorry> --name <piece>_step<k>`. Lean's
+   `extract_goal` prints the lemma with the exact local context as binders -- universes,
+   instance arguments, earlier `have`s and the induction hypothesis included -- so nothing is
+   transcribed by hand. (`lean_goal` at the position shows the same context if you want to read
+   it first.)
+3. Paste the lemma above the theorem, make the step `exact <piece>_step<k> ...`, and run
+   `$AIP check --statement-only` on the file.
+4. `$AIP probe` the new lemma (a false extracted statement means the surrounding proof was
+   already off the rails -- look upstream).
+5. Submit the lemma alone: `--context` = frozen definitions (+ any lemma it may use as a
+   `sorry`d given), `--lean-statement` = the lemma, `--theorem-text`/`--proof-text` = that step
+   of P, `-k 4`. Small, fully specified goals are what AIProver solves most reliably.
+6. Weave the returned proof body back; `check`; judge.
+
+## 10. Search order, and cslib
+
+1. `lean_local_search NAME` -- by name prefix, across Mathlib AND cslib of THIS project. Always
+   first when you have a guess at the name.
+2. `$AIP search "concept words"` -- declarations whose name, header or docstring contain every
+   word; cslib by default, `--lib mathlib|all` for Mathlib (first run builds a cached index,
+   ~10 s). Hits print the exact `import` line.
+3. `lean_loogle` -- by type shape (`_ * (_ ^ _)`, `|- tsum _ = _ * tsum _`); `lean_leansearch`
+   / `lean_leanfinder` -- natural language. Hosted, newer Mathlib: confirm every hit with 1.
+   (`$AIP search --lib loogle|leansearch|leandex` reaches the same services from the shell; the
+   lean-lsp tools are the rate-limited path and are preferred inside a session.)
+4. For a concrete goal in a file: `lean_state_search`, `lean_hammer_premise` at the position.
+5. `lean_hover_info` on the chosen name to read what it IS before using it (failure mode 1).
+
+cslib: `import Cslib` loads only six modules; import the module a hit lives in
+(`.lake/packages/cslib/Cslib/A/B.lean` -> `import Cslib.A.B`). Use it only when T is about
+its notions (transition systems, bisimulation, process calculi, lambda calculi, combinatory
+logic, linear logic) and the environment compiling your answer has it. Tell AIProver which
+module to import in `--hint` when you delegate such a piece; it searches cslib with
+`lean_local_search` too, but naming the module saves it turns.
+
+## 11. Tactic rules that keep P̂ faithful
+
+For your own small repairs, and as `--hint` material when a sample violates them:
+- **No enumeration where P argues.** `fin_cases`, `decide`, `interval_cases`, `omega` over a
+  case split that P handles conceptually replaces P's argument -- a (d) failure even when it
+  compiles. Automation may close a step P also treats as routine.
+- **Mirror P's structure.** One `have`/lemma per intermediate claim of P, in P's order, used
+  where P uses it. A proof that reaches the conclusion by a different route is not P̂.
+- **Typed numerals and casts.** Write `((2 : ℝ) / 3)`, never bare `2 / 3`; decide the carrier
+  of each variable up front; a `↑` sits exactly where T's arithmetic happens.
+- **No `set_option maxHeartbeats`** above the default to force `decide`/`simp` through: that is
+  a sign the statement or the route is wrong, and `maxHeartbeats 0` is a disqualifier.
+- **Keep automation calls small.** `linarith`/`nlinarith` with the five hypotheses that matter,
+  not the whole context; `simp only [...]` once you know the lemma set (`simp?` finds it).
+- **Repeated branches = a lemma.** Identical scripts in several cases mean a `wlog` or a helper
+  lemma, never copy-paste.
+- **Never weaken to compile.** Adding a hypothesis, specialising a type, or dropping a part to
+  make a proof go through trades an (a)/(b) failure for a (c) failure.
+
+## 12. Standalone mode: the informal steps without a coding agent
+
+`bin/aiprover` can be driven by a person with no Claude Code or Codex. The judgement steps then
+have no frontier model, so three commands offer them on AIProver's own endpoint (an
+OpenAI-compatible chat API; the model is Lean-specialised, so treat the answers as drafts):
+
+| command | what it does | NL analogue in the plugin modes |
+|---|---|---|
+| `expand --problem P.txt --out P2.txt` | rewrites P as numbered atomic steps, method and lemmas kept; a critic pass checks method/lemmas/assumptions and the writer revises (`--rounds`) | step 1b, done by the coding agent |
+| `backtranslate FILE.lean` | says in plain English what every declaration of the file states, hypotheses and number types included | judge protocol (c) step 1, done by the coding agent |
+| `ask "question" [--file F.lean]` | one free-form question with a file as context | the agent's own reasoning |
+
+Every command has `--dry-run` (prints the prompt). The coding agents are told NOT to call these:
+they are better informal mathematicians than the model behind them.
+

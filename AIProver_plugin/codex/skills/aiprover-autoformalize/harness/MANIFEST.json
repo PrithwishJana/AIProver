@@ -1,7 +1,8 @@
 {
  "champion": "hevo_mixed_v1/d00_r00/d01_r04 (round 4, fitness 0.5375 on 509 train problems: 205 solved, 9 faithful-with-sorry, 173 compile-but-unfaithful)",
  "source": "/home/pjana/runs/hevo_mixed_v1/memory/d00_r00/d01_r04/harness.py",
- "harness_sha256": "1b6fa629087d5ce8a5d005c70f2ca9371a973561a8a09b176ba0c0e62ab3f91b",
+ "champion_sha256": "1b6fa629087d5ce8a5d005c70f2ca9371a973561a8a09b176ba0c0e62ab3f91b",
+ "harness_sha256": "99ca81dd34ee6d5654fdccf2585197f7468dd0742847daf68dcda6c45c80671e",
  "grader_source": "harness_runner/grade_type_correctness.py",
  "grader_sha256": "a0ca0135bcb35d6413be380fc32771b2da3eb2c18058e798f39ae03cde310328",
  "model_settings": {
@@ -10,5 +11,12 @@
   "max_turns": 100,
   "auto_compact_threshold": 200000
  },
- "note": "Byte-identical copy. Do not edit: every number quoted for AIProver was measured with exactly these bytes. `aiprover doctor` verifies the hashes."
+ "deltas_from_champion": [
+  "IMPORT_ROOTS: + \"Cslib\" (the pinned cslib package built into the project; see setup/lean_project/).",
+  "cslib_source(): locates the built cslib sources, mirroring mathlib_source().",
+  "TASK prompt: the disqualifying-import rule names Cslib, and one ENVIRONMENT bullet describes cslib and how to import/search it -- both only when cslib_source() is not None, so the prompt never names an absent package.",
+  "`config` mode prints the resolved cslib path; selftest gains `prompt names cslib iff it is built`.",
+  "Nothing else: loop, tool set, hooks, budgets, model settings and every other line of the prompt are the champion's."
+ ],
+ "note": "Champion d01_r04 plus the additive deltas listed above (cslib support). Every number quoted for AIProver was measured with the champion bytes (champion_sha256); the deltas add an optional library and change no measured behaviour on Mathlib-only problems. `aiprover doctor` verifies harness_sha256 and grader_sha256."
 }

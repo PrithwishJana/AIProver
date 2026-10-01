@@ -1,6 +1,6 @@
 ---
 name: aiprover-autoformalize
-description: Proof auto-formalization into Lean 4 (v4.23.0 + Mathlib) with the AIProver agent -- our fine-tuned Leanstral prover driven by an evolved agentic harness. Use whenever you are given a natural-language theorem with its proof (e.g. <informal_theorem>/<informal_proof> blocks) and must produce a Lean 4 formalization that compiles, has no sorry, states exactly the theorem, and follows the proof. Delegate Lean writing and proof search to AIProver; you plan, judge, decompose and weave.
+description: Proof auto-formalization into Lean 4 (v4.23.0 + Mathlib, plus cslib for computer-science notions) with the AIProver agent -- our fine-tuned Leanstral prover driven by an evolved agentic harness. Use whenever you are given a natural-language theorem with its proof (e.g. <informal_theorem>/<informal_proof> blocks) and must produce a Lean 4 formalization that compiles, has no sorry, states exactly the theorem, and follows the proof. Delegate Lean writing and proof search to AIProver; you plan, judge, decompose and weave.
 ---
 
 # AIProver: proof auto-formalization
@@ -51,6 +51,9 @@ $AIP submit --theorem-text "..." --proof-text "..." [--context C.lean] [--lean-s
 $AIP wait JOB [JOB...] --timeout 540 [--any]     # blocks <= 9 min; rc 0 done, rc 3 still running
 $AIP result JOB [--all] [--json]   # per-sample status + best Lean file + its check
 $AIP check FILE.lean [--statement-only] [--fixed C.lean]   # (a)+(b); rc 0 = PASS
+$AIP probe FILE.lean               # statement sanity: counterexample search + automation closers (~5 s)
+$AIP search "words" [--lib cslib|mathlib|all|loogle|leansearch|leandex]   # library search (local pinned, or hosted)
+$AIP extract FILE.lean --line N [--name L]   # the goal at that `sorry` as a standalone lemma, binders written by Lean
 $AIP workspace --new NAME          # path for YOUR Lean file inside the lean-lsp project
 $AIP status | list | cancel JOB
 ```
@@ -71,13 +74,42 @@ $AIP status | list | cancel JOB
 - `--statement-only` sends an empty proof block: AIProver formalizes the statement alone
   (a `sorry` proof is the complete answer there). This is useful for drafting T̂ quickly.
 - `--hint` passes one line of guidance, e.g. the compiler error to fix or the Mathlib lemma to use.
+  `--hint-file F` passes longer guidance: the goal state where the last attempt got stuck, the
+  exact error, the lemma names you found. Use it on every resubmission (step 4d).
+- `probe` rewrites every theorem's proof as `plausible` (Mathlib's random tester) and tries the
+  closers `decide simp omega norm_num aesop grind` on each statement alone. `COUNTEREXAMPLE`
+  means the statement is FALSE as written -- a dropped hypothesis, a narrowed or widened
+  quantifier, ℕ subtraction or floor division where T means ℤ/ℚ/ℝ -- so (c) fails before any
+  proof work; `closed by automation alone` is the "not vacuous" clause of the judge made
+  mechanical. `untestable` (abstract types, undecidable relations) and `no counterexample` prove
+  nothing. Run it on every candidate and every skeleton before you judge.
+- `search` is for the concept when the name is unknown ("bisimulation transitive", "confluence
+  full beta"): every word must occur in the name, header, docstring or module path; hits print the
+  exact `import` line. `--lib loogle|leansearch|leandex` query the hosted indexes (newer Mathlib:
+  confirm names locally). `lean_local_search` already finds names by prefix across Mathlib AND
+  cslib, and the lean-lsp `lean_loogle`/`lean_leansearch`/`lean_leanfinder` tools are the
+  rate-limited path to the same hosted services -- prefer them over `search --lib loogle` here.
+- `extract` isolates a stuck step: point it at the `sorry` standing for the step and Lean's
+  `extract_goal` writes the lemma with the exact local context as binders (universes, instances,
+  earlier `have`s included). Paste it above the theorem, close the step with it, delegate it alone.
+- `expand`, `backtranslate`, `ask` exist for STANDALONE use (they ask AIProver's own model). You
+  are a stronger informal mathematician than that model: do steps 1b and the judge protocol
+  yourself; do not call these.
 
 **lean-lsp MCP tools** (server `lean-lsp`: `lean_diagnostic_messages`, `lean_goal`, `lean_multi_attempt`,
 `lean_run_code`, `lean_local_search`, `lean_loogle`, `lean_leansearch`, `lean_hover_info`,
-`lean_verify`, ...) are available to you for quick local work: checking a goal, trying a tactic,
-confirming a lemma name, reading a definition. Files must live in the project that
-`$AIP workspace --new NAME` points into. Use them for cheap targeted checks, not for long proof
-searches (delegate those).
+`lean_verify`, `lean_state_search`, `lean_hammer_premise`, ...) are available to you for quick
+local work: checking a goal, trying a tactic, confirming a lemma name, reading a definition,
+retrieving premises for a goal. Files must live in the project that `$AIP workspace --new NAME`
+points into. Use them for cheap targeted checks, not for long proof searches (delegate those).
+
+**Libraries.** The project pins Mathlib `v4.23.0` and **cslib** (the Lean library for Computer
+Science, at its last Lean-4.23.0 commit: lambda calculus, combinatory logic, labelled transition
+systems and bisimulation, CCS, linear logic). When T is about such notions, search cslib
+(`$AIP search`, `lean_local_search`) and import the module a hit lives in -- `import Cslib`
+alone loads only a few modules. Import cslib only when the problem needs it and the environment
+that will compile your answer has it (this plugin's project does; a plain Mathlib checker does
+not). Both AIProver and `check` accept `Cslib.*` imports.
 
 ## The procedure
 
@@ -94,19 +126,32 @@ lemmas L1..Lm and how the main argument uses them. Resolve ambiguity now: which 
 (ℕ/ℤ/ℚ/ℝ), what "positive"/"nonzero" range, 0- or 1-indexing, which Mathlib notion each named
 concept is.
 
+**1b. Make P explicit before anyone formalizes it.** AIProver follows P as written, so a gap in P
+becomes a gap in P̂. Where P says "similarly", "clearly", "by induction" without the induction
+hypothesis, "by the usual argument", or skips a case, write the missing steps out yourself:
+numbered atomic steps, each naming the fact or rule it uses, every case of a case split listed.
+Keep P's METHOD and its intermediate lemmas exactly (that is (d)); expand, never replace. Send
+this expanded proof as the `<informal_proof>` block (or `--proof-text`), and keep the original P
+beside it for the judge. Also pin notation that P leaves implicit (which type the variables
+range over, what "divides" or "≤" means for the objects at hand). This is the single cheapest
+thing you can do for AIProver's success rate.
+
 **2. Delegate the whole problem at once.** `$AIP submit --problem problem.txt -k 4 --name whole`,
 then `wait`. For a long problem (many parts or lemmas) ALSO submit
 `--statement-only -k 2 --name stmt` at the same time, so you get statement drafts to judge early.
 
-**3. Judge every `verified` sample**, best first, with the judge protocol. Take the first that
-passes (c) and (d). If none pass, keep what IS right: a faithful statement, correct definitions,
+**3. Probe, then judge every `verified` sample**, best first. `$AIP probe s<i>.lean` first: a
+`COUNTEREXAMPLE` fails (c) outright (keep the file only as a draft); `closed by automation
+alone` on a theorem that should carry content is the narrowing smell -- check it hard. Then the
+judge protocol. Take the first that passes (c) and (d). If none pass, keep what IS right: a faithful statement, correct definitions,
 lemma statements, and proofs of some parts.
 
 **4. If no sample is complete and faithful: fix the statement, then decompose.**
   a. Write the skeleton yourself (usually by correcting the best sample): definitions, every
      lemma Li of the NL proof and every theorem part Tj as a Lean statement with `:= by sorry`.
-     `$AIP check --statement-only skeleton.lean` must PASS, and the skeleton must pass the judge
-     for (c) and for the lemma structure of (d). **Freeze it** -- from now on the statements do
+     `$AIP check --statement-only skeleton.lean` must PASS, `$AIP probe skeleton.lean` must show
+     no counterexample, and the skeleton must pass the judge for (c) and for the lemma structure
+     of (d). **Freeze it** -- from now on the statements do
      not change unless the judge finds a fault.
   b. Submit one job per open piece, all in parallel: `--context` = the frozen definitions plus
      the statements of the lemmas that piece may use (as `sorry`d givens); `--lean-statement` =
@@ -116,10 +161,22 @@ lemma statements, and proofs of some parts.
   c. Weave: paste each returned proof into the skeleton (take only the proof bodies; the
      statements are frozen). `$AIP check`. Fix small breakage yourself (a name clash, an `open`,
      a missing `import`) and check again.
-  d. A piece that fails: read its best sample's diagnostics, then resubmit with a `--hint` naming
-     the error or a useful lemma. If it fails again, split it further along P's own reasoning
-     (sub-lemmas), recurse, and weave back. Only prove a small step yourself when it is a few
-     lines and AIProver has already failed on it.
+  d. A piece that fails -- the ladder, in this order, one rung per round:
+     1. **Resubmit with a structured hint** (`--hint-file`): the exact error, the goal state at the
+        failing step (`lean_goal` on the best sample's file), and the lemma names you confirmed
+        with `lean_local_search`/`$AIP search`/`lean_loogle`. `-k 4`.
+     2. **Extract the stuck step as a lemma.** In the best sample's file replace the failing step
+        by `sorry` (so the file elaborates) and run `$AIP extract FILE --line <that line>`: Lean
+        writes the lemma with the exact context as binders. Paste it above the theorem, close the
+        step with `exact <lemma> ..`, `check --statement-only`, `probe`, and submit the lemma
+        ALONE (`--context` = the frozen definitions, `--lean-statement` = the lemma, NL = that
+        step of P). AIProver solves small, fully-specified goals far more reliably than it finds
+        its way through a long proof.
+     3. **Split along P's own reasoning** (sub-lemmas for each step of P's argument), recurse,
+        and weave back.
+     4. Only after these: prove a small step yourself when it is a few lines.
+     Never bypass the ladder by weakening the statement, and do not let a piece absorb more
+     than ~3 rounds before you split it.
 
 **5. Final gate** -- on the exact final file, in this order:
   1. `$AIP check final.lean` -> PASS (covers (a) and (b); warnings about a bare `trivial` proof
@@ -174,12 +231,15 @@ the text meant rather than what the Lean says.
 
 ## The answer
 
-- ONE self-contained Lean 4 file: `import Mathlib` (or Mathlib submodules), your definitions,
-  lemmas and theorems, with no reference to files of your own. It must PASS `$AIP check`.
+- ONE self-contained Lean 4 file: `import Mathlib` (or Mathlib submodules; cslib modules only
+  when the problem needs them, see Libraries), your definitions, lemmas and theorems, with no
+  reference to files of your own. It must PASS `$AIP check`.
 - If the request specifies an output format, follow it EXACTLY. The step1 evaluation, for
   example, wants nothing but
   `<formal_proof>` + one ```` ```lean4 ```` fence holding the whole file + `</formal_proof>`.
   Otherwise print the file in a ```` ```lean4 ```` block and state that all four checks pass.
 
-More detail -- decomposition worked through on an example, and AIProver's measured failure
-modes -- is in `references/playbook.md`. Read it the first time you decompose.
+More detail -- decomposition worked through on an example, AIProver's measured failure modes,
+how to make P explicit, what `probe` output means, the lemma-extraction recipe, search order and
+the tactic rules that keep P̂ faithful -- is in `references/playbook.md`. Read it the first time
+you decompose.

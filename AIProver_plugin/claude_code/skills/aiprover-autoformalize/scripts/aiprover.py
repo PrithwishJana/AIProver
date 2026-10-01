@@ -13,6 +13,12 @@ for up to 100 turns -- not a single completion. A call takes minutes (median ~13
     aiprover result JOB [--json] [--all]     summary + the best Lean file
     aiprover status [JOB]  |  list  |  cancel JOB
     aiprover check FILE.lean [--statement-only]   mechanical checks (a) type-correct, (b) complete
+    aiprover probe FILE.lean                 statement sanity: counterexample search + automation closers
+    aiprover search QUERY [--lib cslib|mathlib|all|loogle|leansearch|leandex]   library search
+    aiprover extract FILE.lean --line N      the goal at a `sorry` as a standalone lemma (Lean writes the binders)
+    aiprover expand --problem P.txt [--out P2.txt]   standalone: AIProver's model rewrites the proof as explicit steps
+    aiprover backtranslate FILE.lean         standalone: AIProver's model says in English what the Lean states
+    aiprover ask "question" [--file F.lean]  standalone: one free-form question to AIProver's model
     aiprover render ...                      print the problem.txt a submit would send
     aiprover tunnel [up|status|down]         the SSH tunnel to the model server
     aiprover workspace                       path of the Lean scratch project for YOUR files
@@ -43,6 +49,7 @@ import threading
 import time
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -54,7 +61,8 @@ MANIFEST = SKILL_DIR / "harness" / "MANIFEST.json"
 
 STANDARD_AXIOMS = {"propext", "Classical.choice", "Quot.sound"}
 IMPORT_ROOTS = ("Mathlib", "Init", "Std", "Batteries", "Aesop", "Qq", "ImportGraph",
-                "Plausible", "ProofWidgets", "LeanSearchClient", "Lean")
+                "Plausible", "ProofWidgets", "LeanSearchClient", "Lean",
+                "Cslib")       # pinned dependency of the project, built next to Mathlib
 
 
 class AIProverError(RuntimeError):
@@ -465,7 +473,7 @@ def check_lean(cfg: Config, text: str, *, statement_only: bool = False,
     for m in _IMPORT.finditer(code):
         if m.group(1).split(".")[0] not in IMPORT_ROOTS:
             problems.append(f"imports `{m.group(1)}`: the answer must be self-contained "
-                            f"(Mathlib/Std/Batteries/Aesop/... only)")
+                            f"(Mathlib/Std/Batteries/Aesop/Cslib/... only)")
     for rx, why in _DISQ:
         if rx.search(code):
             problems.append(why)
@@ -537,7 +545,11 @@ def make_scratch_project(root: Path, lean_project: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     for name in ("lean-toolchain", "lakefile.lean", "lake-manifest.json"):
         src = lean_project / name
-        if src.is_file() and not (root / name).is_file():
+        # Copied when missing AND refreshed when the built project's copy has changed: a package
+        # added later (cslib) is only on LEAN_PATH once the manifest HERE lists it. These three
+        # are project configuration, never the agent's work, so overwriting them is safe.
+        if src.is_file() and (not (root / name).is_file()
+                              or (root / name).read_bytes() != src.read_bytes()):
             shutil.copy2(src, root / name)
     lib = re.search(r"lean_lib\s+«?([A-Za-z_][\w]*)»?", (root / "lakefile.lean").read_text()
                     if (root / "lakefile.lean").is_file() else "")
@@ -603,8 +615,9 @@ def render_problem(a: argparse.Namespace) -> str:
             "written below (same name, same binders, same hypotheses, same conclusion); replace "
             "only its `sorry` with a real proof that follows the informal proof.\n"
             f"```lean\n{stmt}\n```")
-    if a.hint:
-        extra.append(f"Guidance: {a.hint.strip()}")
+    hint = _read_arg(getattr(a, "hint_file", None), a.hint)
+    if hint:
+        extra.append(f"Guidance: {hint.strip()}")
     thm_block = thm + ("\n\n" + "\n\n".join(extra) if extra else "")
     return (f"<informal_theorem>\n{thm_block}\n</informal_theorem>\n\n"
             f"<informal_proof>\n{prf}\n</informal_proof>\n")
@@ -646,6 +659,634 @@ def preserved(fixed: str, answer: str) -> list[str]:
         if h and h not in ans:
             missing.append(h[:160])
     return missing
+
+
+# =============================================================================
+# LIBRARY SEARCH -- declarations and docstrings of the libraries built into THIS project
+# =============================================================================
+# `lean_local_search` (lean-lsp-mcp) finds declarations by NAME and already covers every package
+# under .lake/packages, cslib included. This is its complement: a text search over declaration
+# headers AND docstrings, for when the concept is known but the name is not ("bisimulation
+# transitive", "confluence full beta"). No hosted index exists for cslib, so this reads the
+# sources of the exact revision this project compiles against -- version-correct by
+# construction, which the hosted Mathlib indexes are not.
+SEARCH_LIBS = {"cslib": "Cslib", "mathlib": "Mathlib"}          # package dir -> module root
+_DECL_RE = re.compile(
+    r"^(?P<lead>[ \t]*(?:@\[[^\]]*\][ \t]*)*"
+    r"(?:(?:private|protected|noncomputable|partial|scoped|local|nonrec)[ \t]+)*)"
+    r"(?P<kind>theorem|lemma|def|abbrev|structure|class|inductive|instance|opaque)[ \t]+"
+    r"(?P<name>[^\s:(\[{⟨]+)", re.M)
+_SCOPE_RE = re.compile(r"^(namespace|section|end)(?:[ \t]+([\w.']+))?[ \t]*$", re.M)
+_DOCSTRING_RE = re.compile(r"/--(.*?)-/", re.S)
+_OPEN, _CLOSE = "([{⟨", ")]}⟩"
+
+
+def _header_end(text: str, start: int, cap: int = 700) -> int:
+    """Offset where a declaration's header ends: the first depth-0 `:=` or ` where`, or the
+    first following line that starts at column 0 (a new command), or `cap` characters."""
+    depth, i, n = 0, start, min(len(text), start + cap)
+    while i < n:
+        c = text[i]
+        if c in _OPEN:
+            depth += 1
+        elif c in _CLOSE:
+            depth = max(0, depth - 1)
+        elif depth == 0 and text.startswith(":=", i):
+            return i
+        elif depth == 0 and text.startswith(" where", i) and i > start:
+            return i
+        elif c == "\n" and i + 1 < n and text[i + 1] not in " \t\n":
+            return i
+        i += 1
+    return n
+
+
+def _index_package(pkg_dir: Path, root: str) -> list[dict]:
+    recs: list[dict] = []
+    for f in sorted((pkg_dir / root).rglob("*.lean")):
+        try:
+            text = f.read_text(errors="replace")
+        except OSError:
+            continue
+        module = root + "." + ".".join(f.relative_to(pkg_dir / root).with_suffix("").parts)
+        docs = [(m.end(), m.group(1).strip()) for m in _DOCSTRING_RE.finditer(text)]
+        scopes: list[tuple[int, str, str | None]] = [(m.start(), m.group(1), m.group(2))
+                                                    for m in _SCOPE_RE.finditer(text)]
+        si = di = 0
+        stack: list[tuple[str, str | None]] = []
+        for m in _DECL_RE.finditer(text):
+            while si < len(scopes) and scopes[si][0] < m.start():
+                _, kw, nm = scopes[si]
+                if kw == "end":
+                    if stack:
+                        stack.pop()
+                else:
+                    stack.append((kw, nm))
+                si += 1
+            prefix = ".".join(nm for kw, nm in stack if kw == "namespace" and nm)
+            name = m.group("name")
+            fqn = f"{prefix}.{name}" if prefix and not name.startswith("_root_.") else name
+            doc = ""
+            while di < len(docs) and docs[di][0] <= m.start():
+                di += 1
+            if di > 0 and re.fullmatch(r"(?:\s|@\[[^\]]*\])*", text[docs[di - 1][0]:m.start()]):
+                doc = docs[di - 1][1]
+            head = re.sub(r"\s+", " ", text[m.start("kind"):_header_end(text, m.start("kind"))])
+            recs.append({"module": module, "kind": m.group("kind"), "name": fqn,
+                         "header": head[:300], "doc": re.sub(r"\s+", " ", doc)[:300],
+                         "line": text.count("\n", 0, m.start()) + 1})
+    return recs
+
+
+def _package_rev(project: Path, pkg: str) -> str:
+    try:
+        for e in json.loads((project / "lake-manifest.json").read_text()).get("packages", []):
+            if e.get("name") == pkg:
+                return str(e.get("rev") or "norev")[:12]
+    except (OSError, ValueError):
+        pass
+    return "norev"
+
+
+def load_search_index(cfg: Config, pkg: str) -> list[dict]:
+    """The declaration index of one package, built once per pinned revision and cached."""
+    project = cfg.p("lean_project")
+    pkg_dir = project / ".lake" / "packages" / pkg
+    root = SEARCH_LIBS[pkg]
+    if not (pkg_dir / root).is_dir():
+        raise AIProverError(f"package {pkg!r} is not in {project} (run ./setup.sh {pkg})")
+    cache = cfg.work_root / "search_index" / f"{pkg}-{_package_rev(project, pkg)}.json"
+    if cache.is_file():
+        try:
+            return json.loads(cache.read_text())
+        except ValueError:
+            pass
+    recs = _index_package(pkg_dir, root)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    tmp = cache.with_suffix(".tmp")
+    tmp.write_text(json.dumps(recs))
+    tmp.replace(cache)
+    return recs
+
+
+def search_library(cfg: Config, query: str, libs: list[str], limit: int) -> list[dict]:
+    """Terms are matched against the name, the header, the docstring and the module path.
+
+    Full matches (every term somewhere) come first, ranked: all terms in the name, then
+    name+header, then anything; shorter names first. When nothing matches every term, the best
+    PARTIAL matches are returned instead (most terms matched first) and marked `partial`, so a
+    near-synonym ("bisimulation" for a lemma documented as "bisimilarity") still finds the file.
+    """
+    terms = [t.lower() for t in query.split() if t.strip()]
+    if not terms:
+        raise AIProverError("empty query")
+    full: list[tuple[tuple, dict]] = []
+    partial: list[tuple[tuple, dict]] = []
+    for pkg in libs:
+        for r in load_search_index(cfg, pkg):
+            name, head, doc, mod = (r["name"].lower(), r["header"].lower(), r["doc"].lower(),
+                                    r["module"].lower())
+            matched = [t for t in terms if t in name or t in head or t in doc or t in mod]
+            if not matched:
+                continue
+            if len(matched) == len(terms):
+                rank = (0 if all(t in name for t in terms) else
+                        1 if all(t in name or t in head for t in terms) else 2)
+                full.append(((rank, len(name), name), r))
+            elif len(terms) > 1:
+                partial.append(((-len(matched), len(name), name),
+                                {**r, "partial": f"matched {len(matched)}/{len(terms)} terms: "
+                                                 + " ".join(matched)}))
+    if full:
+        full.sort(key=lambda h: h[0])
+        return [r for _, r in full[:limit]]
+    partial.sort(key=lambda h: h[0])
+    return [r for _, r in partial[:limit]]
+
+
+def cmd_search(cfg: Config, a: argparse.Namespace) -> int:
+    if a.lib in HOSTED_LIBS:
+        hits = hosted_search(a.lib, a.query, a.n)
+        libs = [a.lib]
+    else:
+        libs = list(SEARCH_LIBS) if a.lib == "all" else [a.lib]
+        hits = search_library(cfg, a.query, libs, a.n)
+    if a.json:
+        print(json.dumps({"lib": a.lib, "caveat": HOSTED_CAVEAT if a.lib in HOSTED_LIBS else "",
+                          "hits": hits}, indent=1, ensure_ascii=False))
+        return 0 if hits else 1
+    if not hits:
+        print(f"no declaration in {'/'.join(libs)} matches any of: {a.query!r}")
+        return 1
+    if a.lib in HOSTED_LIBS:
+        print(f"({a.lib}: {HOSTED_CAVEAT})")
+    elif hits[0].get("partial"):
+        print(f"(no declaration matches every term of {a.query!r}; best partial matches)")
+    for r in hits:
+        tag = f"    ({r['partial']})" if r.get("partial") else ""
+        where = f"    [import {r['module']}]" if r.get("module") else ""
+        print(f"{r['kind']} {r['name']}{where}{tag}".replace("  [", " [", 1) if not r["kind"] else
+              f"{r['kind']} {r['name']}{where}{tag}")
+        if r.get("header"):
+            print(f"    {r['header'][:300]}")
+        if r.get("doc"):
+            print(f"    -- {r['doc'][:220]}")
+    return 0
+
+
+# =============================================================================
+# HOSTED SEARCH -- loogle, leansearch, leandex, for the standalone CLI
+# =============================================================================
+# Claude Code and Codex reach loogle/leansearch/leanfinder through lean-lsp-mcp (rate-limited,
+# cached). Standalone users have no such path, and leandex (semantic search over Lean
+# codebases) is not in lean-lsp-mcp at all, so the three are wrapped here. All hosted indexes
+# track a newer Mathlib than this project, hence the caveat printed with every answer.
+HOSTED_LIBS = ("loogle", "leansearch", "leandex")
+HOSTED_CAVEAT = ("hosted index: it tracks a NEWER Mathlib than this project's v4.23.0 and may not know "
+                 "cslib. Confirm every name with lean_local_search or `search --lib mathlib|cslib` "
+                 "before using it.")
+
+
+def _http_text(url: str, *, data: bytes | None = None, headers: dict | None = None,
+               timeout: float = 20.0, service: str = "") -> str:
+    req = urllib.request.Request(url, data=data, headers=headers or {},
+                                 method="POST" if data is not None else "GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        raise AIProverError(f"{service}: HTTP {e.code} -- the service is unavailable or refused the "
+                            f"query; try again later or use the local libraries") from None
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise AIProverError(f"{service}: {e} -- no outbound network, or the service is down") from None
+
+
+def hosted_search(lib: str, query: str, limit: int) -> list[dict]:
+    q = urllib.parse.quote(query)
+    if lib == "loogle":
+        raw = json.loads(_http_text(f"https://loogle.lean-lang.org/json?q={q}", service="loogle"))
+        if raw.get("error"):
+            sug = raw.get("suggestions") or []
+            raise AIProverError(f"loogle: {raw['error']}" + (f"; suggestions: {sug[:5]}" if sug else ""))
+        return [{"kind": "", "name": h.get("name", ""), "module": h.get("module", ""),
+                 "header": h.get("type", ""), "doc": h.get("doc") or ""}
+                for h in raw.get("hits", [])[:limit]]
+    if lib == "leansearch":
+        body = json.dumps({"num_results": str(limit), "query": [query]}).encode()
+        raw = json.loads(_http_text("https://leansearch.net/search", data=body, service="leansearch",
+                                    headers={"Content-Type": "application/json",
+                                             "User-Agent": "aiprover/1.1"}))
+        rows = raw[0] if isinstance(raw, list) and raw and raw[0] else []
+        out = []
+        for r in rows[:limit]:
+            r = r.get("result", r) if isinstance(r, dict) else {}
+            j = lambda v: ".".join(v) if isinstance(v, list) else str(v or "")
+            out.append({"kind": str(r.get("kind") or ""), "name": j(r.get("name")),
+                        "module": j(r.get("module_name")), "header": str(r.get("type") or ""),
+                        "doc": str(r.get("docstring") or "")})
+        return out
+    if lib == "leandex":
+        headers = {"accept": "text/event-stream", "user-agent": "aiprover/1.1"}
+        key = os.environ.get("LEAN_LEANDEX_API_KEY") or os.environ.get("LEANDEX_API_KEY")
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        raw = _http_text("https://leandex.projectnumina.ai/api/v1/search"
+                         f"?q={q}&limit={limit}&generate_query=False&analyze_result=False",
+                         headers=headers, timeout=30, service="leandex")
+        data_lines = [l[5:].strip() for l in raw.splitlines() if l.startswith("data:")]
+        payload = data_lines[-1] if data_lines else raw.strip()
+        try:
+            parsed = json.loads(payload)
+        except ValueError:
+            raise AIProverError(f"leandex: unparseable response: {payload[:200]}") from None
+        results = ((parsed.get("data") or {}).get("search_results")
+                   or parsed.get("search_results") or [])
+        out = []
+        for r in results[:limit]:
+            d = r.get("primary_declaration") or {}
+            pick = lambda *ks: next((str(x[k]) for x in (d, r) for k in ks if x.get(k)), "")
+            out.append({"kind": "", "name": pick("lean_name", "name"),
+                        "module": pick("module_name", "source_file"),
+                        "header": pick("statement_text", "display_statement_text", "type"),
+                        "doc": pick("docstring", "informal_description")})
+        return out
+    raise AIProverError(f"unknown hosted library {lib!r}")
+
+
+# =============================================================================
+# EXTRACT -- the goal at a `sorry` becomes a standalone lemma, with Lean writing the binders
+# =============================================================================
+# The escalation ladder's second rung: a stuck step is isolated as its own lemma and delegated
+# alone. Transcribing the goal state into binders by hand is where names get lost and
+# universes go wrong, so Mathlib's `extract_goal` does it: it prints `theorem extracted ...
+# := sorry` with the exact local context. We insert it at the `sorry`, compile once, and
+# hand the lemma back renamed and ready to paste.
+_EXTRACTED_RE = re.compile(r"^theorem\s+(?P<name>[^\s.{]+(?:\.[^\s.{]+)*)(?P<univ>\.\{[^}]*\})?"
+                           r"(?P<rest>.*?):=\s*sorry\s*$", re.M | re.S)
+
+
+def extract_lemma(cfg: Config, text: str, line: int, col: int | None = None,
+                  name: str | None = None) -> dict:
+    lines = text.split("\n")
+    if not 1 <= line <= len(lines):
+        raise AIProverError(f"--line {line} is outside the file (1..{len(lines)})")
+    src = lines[line - 1]
+    idx = src.find("sorry", (col - 1) if col else 0)
+    if idx < 0:
+        raise AIProverError(f"no `sorry` on line {line}: point --line at the sorry that stands for the stuck step")
+    before, after = src[:idx].rstrip(), src[idx + len("sorry"):]
+    if before == "" or re.search(r"(\bby|·|=>|<;>|;)$", before):
+        repl = "extract_goal; sorry"                 # tactic position
+    elif before.endswith(":="):
+        repl = "by extract_goal; sorry"              # term position right after :=
+    else:
+        repl = "(by extract_goal; sorry)"            # a term argument
+    lines[line - 1] = src[:idx] + repl + after
+    # the enclosing declaration, for the default name
+    head = None
+    for m in _DECL_RE.finditer(text):
+        if text.count("\n", 0, m.start()) + 1 <= line:
+            head = m.group("name")
+    base = re.sub(r"[^A-Za-z0-9_]+", "_", head or "goal").strip("_") or "goal"
+    new_name = name or f"{base}_step_L{line}"
+    g = grader(cfg)
+    work = cfg.work_root / "checks"
+    work.mkdir(parents=True, exist_ok=True)
+    ok, out = g.compile_text("\n".join(lines), work=work, project=cfg.p("lean_project"))
+    m = _EXTRACTED_RE.search(out)
+    if not m:
+        errs = [tx.splitlines()[0] for ln, sev, tx in _messages(out) if sev == "error"]
+        raise AIProverError("extract_goal produced no lemma. " + (
+            f"first compiler error: {errs[0][:200]}" if errs else f"compiler output: {out[:300]}"))
+    rest = re.sub(r"\[inst\w*\s*:\s*", "[", m.group("rest"))      # [inst : Group G] -> [Group G]
+    rest = re.sub(r"\s+", " ", rest).strip()
+    lemma = f"lemma {new_name}{m.group('univ') or ''} {rest} := by\n  sorry\n"
+    return {"theorem": head, "line": line, "name": new_name, "lemma": lemma,
+            "extracted_as": m.group("name")}
+
+
+def cmd_extract(cfg: Config, a: argparse.Namespace) -> int:
+    text = Path(a.file).expanduser().read_text(errors="replace")
+    r = extract_lemma(cfg, text, a.line, a.col, a.name)
+    if a.json:
+        print(json.dumps(r, indent=1, ensure_ascii=False))
+        return 0
+    print(f"extracted from {Path(a.file).name}:{r['line']}"
+          + (f" (inside `{r['theorem']}`)" if r["theorem"] else "") + ":\n")
+    print(r["lemma"])
+    print(f"next: paste it ABOVE `{r['theorem'] or 'the theorem'}`, replace the sorry at line {r['line']} "
+          f"with `exact {r['name']} ..` (or `apply {r['name']}`), run `check --statement-only` and "
+          f"`probe` on the file, then submit the lemma alone: --lean-statement <it>, --context <the "
+          f"frozen definitions it mentions>, --theorem-text/--proof-text <that step of P>.")
+    return 0
+
+
+# =============================================================================
+# STANDALONE INFORMAL HELPERS -- AIProver's own model as writer and critic (no coding agent)
+# =============================================================================
+# In the plugin modes the coding agent does these in context: the rigor pass (SKILL step 1b)
+# and the blind back-translation (judge protocol) are Claude Code's or Codex's own model at
+# work, with no extra key. Standalone there is no frontier model, so the same moves are offered
+# on the AIProver endpoint, an OpenAI-compatible chat API. That model is Lean-specialised and
+# its informal mathematics is weaker than a frontier model's, so these commands PRINT drafts for
+# the human to read; nothing is fed anywhere automatically.
+HELPER_TIMEOUT = 900          # one reasoning_effort=high answer can take minutes
+
+EXPAND_WRITER = """You prepare an informal proof for a formalization system that follows the text literally: every \
+gap in the text becomes a gap in the formal proof.
+
+Rewrite the PROOF below as numbered atomic steps. Rules:
+- Keep the proof's METHOD and its intermediate lemmas exactly as they are (same induction, same case \
+split, same contradiction, same auxiliary claims, in the same order). Expand; never replace.
+- Every step names what justifies it: a hypothesis, an earlier step, a standard fact stated precisely, \
+or an induction (say on which variable, and write the induction hypothesis out).
+- List every case of a case split and both directions of an equivalence.
+- Replace "clearly", "obviously", "similarly", "the usual argument", "it follows" by the actual steps.
+- Pin what the text leaves implicit: the type of every variable (natural number, integer, real, \
+element of which structure) and the meaning of every relation or notation used.
+- Do not change the THEOREM, do not add assumptions, do not prove something stronger or weaker.
+Output ONLY the rewritten proof, between <informal_proof> and </informal_proof> tags.
+
+THEOREM:
+{theorem}
+
+PROOF:
+{proof}
+"""
+EXPAND_CRITIC = """Compare EXPANDED, a rewritten proof, against ORIGINAL, the proof it was rewritten from, both of THEOREM.
+Check, concretely:
+1. Is the METHOD preserved (same induction / case split / contradiction / construction)?
+2. Is every intermediate claim of ORIGINAL present in EXPANDED and used where ORIGINAL uses it?
+3. Does EXPANDED introduce any assumption, or prove something weaker or stronger than THEOREM?
+4. Are there remaining gaps: a "clearly", a missing case, an unstated induction hypothesis, a step \
+whose justification is not named?
+Answer with one line `VERDICT: OK` or `VERDICT: ISSUES`, then a numbered list of concrete issues \
+(empty if OK). No other text.
+
+THEOREM:
+{theorem}
+
+ORIGINAL:
+{proof}
+
+EXPANDED:
+{expanded}
+"""
+EXPAND_REFINE = """Revise EXPANDED so that every listed ISSUE is fixed, changing nothing else. Keep the method and \
+the intermediate claims of ORIGINAL. Output ONLY the revised proof between <informal_proof> and \
+</informal_proof> tags.
+
+THEOREM:
+{theorem}
+
+ORIGINAL:
+{proof}
+
+EXPANDED:
+{expanded}
+
+ISSUES:
+{issues}
+"""
+BACKTRANSLATE = """Below is a Lean 4 file. For EVERY theorem, lemma and definition in it, say in plain English exactly \
+what it asserts or defines. Translate what the Lean says, not what it was probably meant to say:
+- every hypothesis, including typeclass assumptions in square brackets and implicit arguments;
+- the quantifiers, in their order and scope (for all / there exists / exists unique);
+- the number type and its conventions (natural-number subtraction truncates at 0, natural and \
+integer division round down, division by zero is 0);
+- what each local definition means after unfolding it, and where it is used;
+- the exact conclusion (strict or non-strict inequality, equality of what, implication or \
+equivalence).
+One paragraph per declaration, headed by its name. No commentary on correctness or intent.
+
+```lean
+{lean}
+```
+"""
+
+
+def chat(cfg: Config, prompt: str, *, max_tokens: int = 6000, temperature: float = 0.3,
+         system: str | None = None) -> str:
+    """One answer from the AIProver endpoint (OpenAI-compatible), with the model thinking."""
+    api, models = ensure_endpoint(cfg)
+    messages = ([{"role": "system", "content": system}] if system else []) + \
+               [{"role": "user", "content": prompt}]
+    r = _http_json(api + "/chat/completions", key=cfg.api_key, timeout=HELPER_TIMEOUT, data={
+        "model": served_model(cfg, models), "max_tokens": max_tokens, "temperature": temperature,
+        "reasoning_effort": "high", "messages": messages})
+    try:
+        return (r["choices"][0]["message"].get("content") or "").strip()
+    except (KeyError, IndexError, TypeError):
+        raise AIProverError(f"unexpected answer from the model endpoint: {str(r)[:300]}") from None
+
+
+def _problem_parts(a: argparse.Namespace) -> tuple[str, str]:
+    text = render_problem(a)
+    thm = re.search(r"<informal_theorem>(.*?)</informal_theorem>", text, re.S).group(1).strip()
+    prf = re.search(r"<informal_proof>(.*?)</informal_proof>", text, re.S).group(1).strip()
+    return thm, prf
+
+
+def _proof_block(answer: str) -> str:
+    m = re.search(r"<informal_proof>(.*?)</informal_proof>", answer, re.S)
+    return (m.group(1) if m else answer).strip()
+
+
+def cmd_expand(cfg: Config, a: argparse.Namespace) -> int:
+    thm, prf = _problem_parts(a)
+    if not prf:
+        raise AIProverError("the proof block is empty: nothing to expand (statement-only problem)")
+    if a.dry_run:
+        print(EXPAND_WRITER.format(theorem=thm, proof=prf))
+        return 0
+    expanded = _proof_block(chat(cfg, EXPAND_WRITER.format(theorem=thm, proof=prf)))
+    verdict = "(not checked)"
+    for rnd in range(max(0, a.rounds - 1)):
+        crit = chat(cfg, EXPAND_CRITIC.format(theorem=thm, proof=prf, expanded=expanded),
+                    max_tokens=2000)
+        verdict = crit.splitlines()[0].strip() if crit else "(no answer)"
+        if "ISSUES" not in verdict.upper():
+            break
+        print(f"[round {rnd + 1}] critic: {' '.join(crit.split())[:400]}", file=sys.stderr)
+        expanded = _proof_block(chat(cfg, EXPAND_REFINE.format(
+            theorem=thm, proof=prf, expanded=expanded, issues=crit)))
+    out = (f"<informal_theorem>\n{thm}\n</informal_theorem>\n\n"
+           f"<informal_proof>\n{expanded}\n</informal_proof>\n")
+    if a.out:
+        Path(a.out).expanduser().write_text(out)
+        print(f"wrote {a.out}  (critic's last verdict: {verdict}). Read the expansion against the "
+              f"original before submitting: the method and the lemmas must be the original's.",
+              file=sys.stderr)
+    else:
+        sys.stdout.write(out)
+        sys.stdout.flush()
+        print(f"(critic's last verdict: {verdict})", file=sys.stderr)
+    return 0
+
+
+def cmd_backtranslate(cfg: Config, a: argparse.Namespace) -> int:
+    lean = Path(a.file).expanduser().read_text(errors="replace")
+    prompt = BACKTRANSLATE.format(lean=lean)
+    if a.dry_run:
+        print(prompt)
+        return 0
+    print(chat(cfg, prompt))
+    sys.stdout.flush()
+    print("\nCompare each paragraph with the informal theorem clause by clause (SKILL.md, judge "
+          "protocol (c)). This is the model's reading of the Lean, not a verdict.", file=sys.stderr)
+    return 0
+
+
+def cmd_ask(cfg: Config, a: argparse.Namespace) -> int:
+    q = a.question
+    if a.file:
+        q += "\n\nContext file `" + Path(a.file).name + "`:\n```lean\n" + \
+             Path(a.file).expanduser().read_text(errors="replace") + "\n```\n"
+    if a.dry_run:
+        print(q)
+        return 0
+    print(chat(cfg, q, max_tokens=a.max_tokens))
+    return 0
+
+
+# =============================================================================
+# STATEMENT PROBE -- is a candidate statement FALSE as written, or closed by automation alone?
+# =============================================================================
+# The dominant AIProver failure is a file that compiles and states the WRONG theorem (173 of
+# 509 training samples). Two mechanical signals catch a share of those before the judge reads:
+#   * a COUNTEREXAMPLE: the informal theorem is true, so a formal statement with a dropped
+#     hypothesis, a narrowed quantifier or the wrong numeric type (ℕ subtraction, floor
+#     division) is often simply false, and `plausible` (Mathlib's random tester) finds a witness;
+#   * CLOSED BY AUTOMATION: `simp`/`decide`/`omega`/... alone proving a research-level statement
+#     is the smell of a narrowed or specialised one (the judge protocol's "not vacuous" clause).
+# Both are advisory. "No counterexample" proves nothing; an abstract statement is "untestable".
+PROBE_CLOSERS = ("decide", "simp", "omega", "norm_num", "aesop", "grind")
+PROBE_HEARTBEATS = 20000
+
+
+def _probe_source(text: str) -> tuple[str, list[dict]]:
+    """Rewrite every theorem/lemma proof as `by plausible` and append one `example` per closer.
+
+    Returns (source, targets). A target records the generated line ranges so compiler messages
+    can be attributed. Declarations without a depth-0 `:=` (pattern-matching proofs) are kept
+    as they are and reported as not probed.
+    """
+    code = _COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)   # keep line count
+    heads = [(m.start(), m) for m in _DECL_RE.finditer(code)]
+    out, targets, pos = [], [], 0
+    for i, (st, m) in enumerate(heads):
+        if m.group("kind") not in ("theorem", "lemma"):
+            continue
+        blk_end = heads[i + 1][0] if i + 1 < len(heads) else len(code)
+        colon = _header_end(code, m.end("name"), cap=blk_end - m.end("name"))
+        if not code.startswith(":=", colon):
+            targets.append({"name": m.group("name"), "skipped": "no `:=` found (pattern-matching proof?)"})
+            continue
+        # the proof ends at the first later line that starts at column 0 (a new command)
+        nl = code.find("\n", colon)
+        pend = blk_end
+        while nl != -1 and nl + 1 < blk_end:
+            if code[nl + 1] not in " \t\n":
+                pend = nl + 1
+                break
+            nl = code.find("\n", nl + 1)
+        sig = code[m.end("name"):colon]
+        base_lines = "".join(out).count("\n")               # generated lines emitted so far
+        thm_gen_line = base_lines + code.count("\n", pos, m.start()) + 1
+        gen_start_line = base_lines + code.count("\n", pos, colon) + 1
+        out.append(code[pos:colon])
+        piece = ":= by plausible\n"
+        closer_lines = {}
+        for c in PROBE_CLOSERS:
+            closer_lines[c] = gen_start_line + piece.count("\n")
+            piece += f"set_option maxHeartbeats {PROBE_HEARTBEATS} in\nexample{sig} := by {c}\n"
+        out.append(piece)
+        targets.append({"name": m.group("name"), "thm_line": thm_gen_line, "gen_line": gen_start_line,
+                        "closers": closer_lines, "end_line": gen_start_line + piece.count("\n")})
+        pos = pend
+    out.append(code[pos:])
+    return "".join(out), targets
+
+
+_MSG_RE = re.compile(r"^(\S+?\.lean):(\d+):(\d+): (error|warning|info)(?:\([^)]*\))?: ?", re.M)
+
+
+def _messages(out: str) -> list[tuple[int, str, str]]:
+    """(line, severity, text) for every compiler message, multi-line bodies included."""
+    ms = list(_MSG_RE.finditer(out))
+    res = []
+    for i, m in enumerate(ms):
+        end = ms[i + 1].start() if i + 1 < len(ms) else len(out)
+        res.append((int(m.group(2)), m.group(4), out[m.end():end].strip()))
+    return res
+
+
+def probe_file(cfg: Config, text: str) -> dict:
+    src, targets = _probe_source(text)
+    g = grader(cfg)
+    work = cfg.work_root / "checks"
+    work.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    ok, out = g.compile_text(src, work=work, project=cfg.p("lean_project"))
+    msgs = _messages(out)
+    results = []
+    for t in targets:
+        if "skipped" in t:
+            results.append({"name": t["name"], "status": "not probed", "detail": t["skipped"]})
+            continue
+        lo, hi = t["gen_line"], t["end_line"]
+        first_closer = min(t["closers"].values())
+        mine = [(ln, sev, tx) for ln, sev, tx in msgs if t["thm_line"] <= ln < first_closer]
+        joined = "\n".join(tx for _, _, tx in mine)
+        if "Found a counter-example!" in joined:
+            body = joined.split("Found a counter-example!", 1)[1].split("-----", 1)[0]
+            status, detail = "COUNTEREXAMPLE", " ; ".join(l.strip() for l in body.strip().splitlines() if l.strip())
+        elif "Failed to create a `testable` instance" in joined:
+            status, detail = "untestable", "no sampling/decidability instances for this statement"
+        elif any(sev == "error" for _, sev, _ in mine):
+            status, detail = "does not elaborate", next(tx.splitlines()[0] for _, sev, tx in mine if sev == "error")[:160]
+        elif "declaration uses 'sorry'" in joined:
+            # `plausible` prints "Unable to find a counter-example" WITHOUT a position and then
+            # admits the goal, so the positioned trace of a passed test is exactly this warning.
+            status, detail = "no counterexample found", "random testing passed; this proves nothing"
+        else:
+            status, detail = "inconclusive", (joined.splitlines()[0][:160] if joined else "no message")
+        closed = []
+        for c, ln in t["closers"].items():
+            nxt = min([v for v in t["closers"].values() if v > ln] + [hi])
+            if not any(sev == "error" and ln <= l < nxt for l, sev, _ in msgs):
+                closed.append(c)
+        results.append({"name": t["name"], "status": status, "detail": detail, "closed_by": closed})
+    return {"results": results, "compile_seconds": round(time.time() - t0, 1),
+            "counterexamples": sum(r["status"] == "COUNTEREXAMPLE" for r in results),
+            "raw": out if not targets else ""}
+
+
+def cmd_probe(cfg: Config, a: argparse.Namespace) -> int:
+    text = Path(a.file).expanduser().read_text(errors="replace")
+    r = probe_file(cfg, text)
+    if a.json:
+        print(json.dumps(r, indent=1, ensure_ascii=False))
+        return 1 if r["counterexamples"] else 0
+    if not r["results"]:
+        print("probe: no theorem/lemma found in the file")
+        if r["raw"]:
+            print(r["raw"][:600])
+        return 2
+    print(f"probe  {Path(a.file).name}  ({len(r['results'])} statement(s), {r['compile_seconds']}s)")
+    for x in r["results"]:
+        line = f"  {x['name']}: {x['status']}"
+        if x["detail"]:
+            line += f"  --  {x['detail']}"
+        print(line)
+        if x.get("closed_by"):
+            print(f"      closed by automation alone: {', '.join(x['closed_by'])}  "
+                  f"-> is the statement narrowed, specialised or trivial? (judge clause 'not vacuous')")
+    if r["counterexamples"]:
+        print("  A COUNTEREXAMPLE means the statement is FALSE as written. Since the informal theorem is "
+              "true, the formalization dropped a hypothesis, narrowed or widened a quantifier, or "
+              "chose the wrong type/cast. Fix the statement before any proof work.")
+    return 1 if r["counterexamples"] else 0
 
 
 # =============================================================================
@@ -1237,6 +1878,16 @@ def cmd_doctor(cfg: Config, a: argparse.Namespace) -> int:
         bool(glob.glob(str(lp / ".lake/packages/[Rr][Ee][Pp][Ll]/.lake/build/bin/repl"))),
         "lean REPL binary present"))
 
+    def c_cslib():
+        pkg = lp / ".lake/packages/cslib"
+        built = (pkg / ".lake/build/lib/lean/Cslib.olean").is_file()
+        if not built:
+            return False, "missing: run ./setup.sh cslib (adds + builds the pinned package, ~15 s)"
+        tc = (pkg / "lean-toolchain").read_text().strip() if (pkg / "lean-toolchain").is_file() else "?"
+        same = tc == grader(cfg).pinned_toolchain(lp)
+        return same, f"Cslib oleans present, toolchain {tc}" + ("" if same else " != project's")
+    check("cslib built (CS library, same Lean)", c_cslib)
+
     def c_canary():
         (cfg.work_root / "checks").mkdir(exist_ok=True)
         t0 = time.time()
@@ -1282,6 +1933,15 @@ def cmd_doctor(cfg: Config, a: argparse.Namespace) -> int:
         return ok, (f"lean-lsp-mcp {out}" + ("" if ok else
                     " -- leanclient gate NOT relaxed: run setup.sh (fix-lean-tools)"))
     check("lean-lsp-mcp + leanclient patch", c_mcp)
+
+    def c_follow():
+        # Both Lean projects reach the libraries through a `.lake/packages` symlink; ripgrep only
+        # traverses it with --follow, which setup.sh patches into lean-lsp-mcp's local search.
+        hits = glob.glob(str(cfg.site_packages("mcp_venv") / "lean_lsp_mcp" / "search_utils.py"))
+        ok = bool(hits) and '"--follow",' in Path(hits[0]).read_text()
+        return ok, ("ripgrep follows .lake/packages (Mathlib + cslib names searchable)" if ok else
+                    "lean_local_search would see NO library declarations: run ./setup.sh venvs")
+    check("lean_local_search reaches the libraries", c_follow)
 
     def c_rg():
         path = ":".join(([cfg.rg_dir()] if cfg.rg_dir() else []) + [os.environ.get("PATH", "")])
@@ -1452,6 +2112,8 @@ def _problem_args(p: argparse.ArgumentParser) -> None:
     g.add_argument("--lean-statement", help="Lean file with the FIXED statement to prove "
                                             "(ending in `:= by sorry`)")
     g.add_argument("--hint", help="one short line of guidance appended to the theorem block")
+    g.add_argument("--hint-file", help="file with longer guidance (a compiler error, the goal "
+                                       "state where the last attempt got stuck, lemma names)")
     g.add_argument("--statement-only", action="store_true",
                    help="formalize the statement only (the proof block is sent empty)")
 
@@ -1495,6 +2157,47 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--statement-only", action="store_true", help="allow `sorry` proofs")
     c.add_argument("--fixed", help="Lean file of declarations that must appear verbatim")
     c.add_argument("--json", action="store_true")
+
+    pb = sub.add_parser("probe", help="statement sanity probe: counterexample search (plausible) "
+                                     "+ which automation tactics close each statement alone")
+    pb.add_argument("file")
+    pb.add_argument("--json", action="store_true")
+
+    se = sub.add_parser("search", help="search declarations + docstrings of the pinned libraries "
+                                      "(cslib by default; lean_local_search covers names)")
+    se.add_argument("query", help="words that must all occur in the name, header or docstring")
+    se.add_argument("--lib", default="cslib",
+                    choices=["cslib", "mathlib", "all", "loogle", "leansearch", "leandex"],
+                    help="local pinned libraries (cslib default, mathlib, all) or a hosted index")
+    se.add_argument("-n", type=int, default=15)
+    se.add_argument("--json", action="store_true")
+
+    ex = sub.add_parser("extract", help="the goal at a `sorry` as a standalone lemma (Lean writes "
+                                       "the binders via extract_goal), for delegating a stuck step")
+    ex.add_argument("file")
+    ex.add_argument("--line", type=int, required=True, help="1-indexed line holding the sorry")
+    ex.add_argument("--col", type=int, help="1-indexed column to pick one of several sorries")
+    ex.add_argument("--name", help="lemma name (default <theorem>_step_L<line>)")
+    ex.add_argument("--json", action="store_true")
+
+    xp = sub.add_parser("expand", help="standalone: AIProver's model rewrites the informal proof as "
+                                      "explicit numbered steps (method and lemmas kept), with a "
+                                      "critique round; the coding agents do this themselves")
+    _problem_args(xp)
+    xp.add_argument("--rounds", type=int, default=2, help="writer + (rounds-1) critic/refine passes")
+    xp.add_argument("--out", help="write a complete problem file (theorem unchanged, proof expanded)")
+    xp.add_argument("--dry-run", action="store_true", help="print the prompt, call nothing")
+
+    bt = sub.add_parser("backtranslate", help="standalone: AIProver's model states in plain English "
+                                             "what each declaration of a Lean file says (judge aid)")
+    bt.add_argument("file")
+    bt.add_argument("--dry-run", action="store_true")
+
+    ak = sub.add_parser("ask", help="standalone: one free-form question to AIProver's model")
+    ak.add_argument("question")
+    ak.add_argument("--file", help="a Lean file to include as context")
+    ak.add_argument("--max-tokens", type=int, default=4000)
+    ak.add_argument("--dry-run", action="store_true")
 
     t = sub.add_parser("tunnel")
     t.add_argument("action", nargs="?", default="status", choices=["up", "status", "down"])
@@ -1546,6 +2249,12 @@ def main(argv: list[str] | None = None) -> int:
             "list": lambda: cmd_list(cfg, a),
             "cancel": lambda: cmd_cancel(cfg, a),
             "check": lambda: cmd_check(cfg, a),
+            "probe": lambda: cmd_probe(cfg, a),
+            "search": lambda: cmd_search(cfg, a),
+            "extract": lambda: cmd_extract(cfg, a),
+            "expand": lambda: cmd_expand(cfg, a),
+            "backtranslate": lambda: cmd_backtranslate(cfg, a),
+            "ask": lambda: cmd_ask(cfg, a),
             "tunnel": lambda: cmd_tunnel(cfg, a),
             "workspace": lambda: cmd_workspace(cfg, a),
             "doctor": lambda: cmd_doctor(cfg, a),

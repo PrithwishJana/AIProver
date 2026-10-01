@@ -5,7 +5,8 @@
 # checks first and does nothing if its target already works.
 #
 #   ./setup.sh                 everything: sync, deps, claude, codex, doctor --full --agents
-#   ./setup.sh deps            elan + Lean 4.23.0, the Mathlib project, both venvs, ripgrep
+#   ./setup.sh deps            elan + Lean 4.23.0, the Mathlib project (+ cslib), both venvs, ripgrep
+#   ./setup.sh cslib           add + build the pinned cslib package in an EXISTING Lean project
 #   ./setup.sh claude          install the Claude Code plugin (skill + lean-lsp MCP)
 #   ./setup.sh codex           install the Codex skill + register the lean-lsp MCP server
 #   ./setup.sh doctor          verify only (= bin/aiprover doctor --full --agents)
@@ -82,6 +83,59 @@ step_lean_project() {
   ( cd "$P" && lake build repl )               # the Lean REPL behind lean-lsp-mcp --repl
   [ -f "$P/.lake/packages/mathlib/.lake/build/lib/lean/Mathlib.olean" ] || die "Mathlib oleans missing"
   ok "built"
+}
+
+# cslib (the Lean library for Computer Science), pinned to its last commit on Lean v4.23.0. That
+# commit's manifest pins mathlib and batteries at EXACTLY this project's revisions, so `lake build`
+# fetches only cslib and compiles its ~30 modules (~15 s) against the prebuilt oleans; Mathlib is
+# not rebuilt or moved. A project provisioned before this step existed gets the two pins appended
+# here; `lake` then resolves cslib from the manifest entry, never via `lake update`.
+CSLIB_REV=cd368e67e7b5cd563be1d7dc47254e9c4d5962cf
+step_cslib() {
+  say "cslib (CS library, pinned $CSLIB_REV) in $AIP_LEAN_PROJECT"
+  local P="$AIP_LEAN_PROJECT"
+  [ -f "$P/lakefile.lean" ] && [ -f "$P/lake-manifest.json" ] || die "no Lean project at $P: run ./setup.sh lean first"
+  if grep -q 'require cslib' "$P/lakefile.lean"; then
+    ok "lakefile already requires cslib"
+  else
+    # The pins live in setup/lean_project/; copy them verbatim rather than restating them here.
+    sed -n '/^-- CSLib, the Lean library/,/^  "https:\/\/github.com\/leanprover\/cslib"/p' "$ROOT/setup/lean_project/lakefile.lean" > "$P/.cslib_require.tmp"
+    grep -q 'require cslib' "$P/.cslib_require.tmp" || die "could not extract the cslib require from setup/lean_project/lakefile.lean"
+    { printf '\n'; cat "$P/.cslib_require.tmp"; } >> "$P/lakefile.lean"; rm -f "$P/.cslib_require.tmp"
+    ok "appended the cslib require to lakefile.lean"
+  fi
+  "$PY" - "$P/lake-manifest.json" "$ROOT/setup/lean_project/lake-manifest.json" <<'PYEOF'
+import json, sys
+dst, src = sys.argv[1], sys.argv[2]
+m = json.load(open(dst))
+if not any(p["name"] == "cslib" for p in m["packages"]):
+    entry = next(p for p in json.load(open(src))["packages"] if p["name"] == "cslib")
+    m["packages"].append(entry)
+    with open(dst, "w") as f:
+        json.dump(m, f, indent=1); f.write("\n")
+    print("   ok: added the cslib entry to lake-manifest.json")
+else:
+    print("   ok: lake-manifest.json already lists cslib")
+PYEOF
+  if [ -f "$P/.lake/packages/cslib/.lake/build/lib/lean/Cslib.olean" ] && \
+     [ "$(git -C "$P/.lake/packages/cslib" rev-parse HEAD 2>/dev/null)" = "$CSLIB_REV" ]; then
+    ok "already built at $CSLIB_REV"; return 0
+  fi
+  export ELAN_HOME="$AIP_ELAN_HOME"; export PATH="$ELAN_HOME/bin:$PATH"
+  # STARTUP.md §6 recommends `chmod -R a-w` on the packages tree so no agent can write the shared
+  # Mathlib. Lake must create .lake/packages/cslib inside it, so lift that for the build only
+  # and put it back -- on the parent AND on the new package, so cslib is as protected as Mathlib.
+  local relock=0
+  if [ ! -w "$P/.lake/packages" ]; then chmod u+w "$P/.lake/packages"; relock=1; fi
+  ( cd "$P" && lake build cslib/Cslib ) || { [ $relock = 1 ] && chmod a-w "$P/.lake/packages"; die "lake build cslib/Cslib failed"; }
+  if [ $relock = 1 ]; then chmod -R a-w "$P/.lake/packages/cslib"; chmod a-w "$P/.lake/packages"; fi
+  [ -f "$P/.lake/packages/cslib/.lake/build/lib/lean/Cslib.olean" ] || die "cslib oleans missing after build"
+  [ "$(git -C "$P/.lake/packages/cslib" rev-parse HEAD)" = "$CSLIB_REV" ] || die "cslib is not at $CSLIB_REV"
+  # Same Lean everywhere: the pinned cslib commit must declare the project's own toolchain.
+  [ "$(cat "$P/.lake/packages/cslib/lean-toolchain")" = "$(cat "$P/lean-toolchain")" ] || \
+    die "cslib toolchain $(cat "$P/.lake/packages/cslib/lean-toolchain") != project $(cat "$P/lean-toolchain")"
+  ok "built ($(find "$P/.lake/packages/cslib/.lake/build/lib/lean" -name '*.olean' | wc -l) oleans, toolchain $(cat "$P/.lake/packages/cslib/lean-toolchain"))"
+  echo "   note: a running lean-lsp MCP server (Claude Code / Codex session) must be restarted to see cslib"
 }
 
 make_venv() {   # $1 = venv dir, $2 = lock file
@@ -172,6 +226,31 @@ PYEOF
     grep -q 'warm_text' "$SCRATCH" && grep -q 'warm_text' "$CLIENT_UTILS" || die "could not apply the scratch warm_text patch"
     ok "scratch pools now warm with the project header (backups $SCRATCH.orig, $CLIENT_UTILS.orig)"
   fi
+  # lean_local_search runs ripgrep over the project root to find declarations by name, and both
+  # Lean projects here (the coding agent's workspace and the harness's per-problem project) reach
+  # Mathlib and cslib through a SYMLINK `.lake/packages -> <built project>/.lake/packages`.
+  # ripgrep does not follow symlinks unless told to, so without `--follow` that leg of the search
+  # sees NO library declarations at all (measured: 0 hits for `Bisimilarity`, 3 with --follow) and
+  # the tool is left with whatever the language server has indexed from the open file's imports.
+  # One flag, idempotent, re-applied after any pip install like the two patches above.
+  local SEARCH_UTILS
+  SEARCH_UTILS=$(find "$AIP_MCP_VENV" -path '*/lean_lsp_mcp/search_utils.py' -print -quit)
+  [ -n "$SEARCH_UTILS" ] || die "lean_lsp_mcp/search_utils.py not found in $AIP_MCP_VENV"
+  if grep -q '"--follow",' "$SEARCH_UTILS"; then
+    ok "lean_local_search follows the .lake/packages symlink (--follow patch present)"
+  else
+    [ -f "$SEARCH_UTILS.orig" ] || cp "$SEARCH_UTILS" "$SEARCH_UTILS.orig"
+    "$PY" - "$SEARCH_UTILS" <<'PYEOF2'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = '        "rg",\n        "--json",\n        "--no-ignore",\n'
+assert s.count(old) == 1, "search_utils.py anchor not found"
+open(p, "w").write(s.replace(old, '        "rg",\n        "--json",\n        "--follow",\n        "--no-ignore",\n'))
+PYEOF2
+    rm -f "$(dirname "$SEARCH_UTILS")"/__pycache__/search_utils.*.pyc
+    grep -q '"--follow",' "$SEARCH_UTILS" || die "could not apply the --follow patch to $SEARCH_UTILS"
+    ok "lean_local_search now follows the .lake/packages symlink (backup $SEARCH_UTILS.orig)"
+  fi
 }
 
 step_rg() {
@@ -254,15 +333,16 @@ load_config
 [ $# -eq 0 ] && set -- all
 for step in "$@"; do
   case "$step" in
-    all)    step_sync; step_elan; step_lean_project; step_venvs; step_rg; step_claude; step_codex; step_doctor ;;
-    deps)   step_elan; step_lean_project; step_venvs; step_rg ;;
+    all)    step_sync; step_elan; step_lean_project; step_cslib; step_venvs; step_rg; step_claude; step_codex; step_doctor ;;
+    deps)   step_elan; step_lean_project; step_cslib; step_venvs; step_rg ;;
     sync)   step_sync ;;
-    lean)   step_elan; step_lean_project ;;
+    lean)   step_elan; step_lean_project; step_cslib ;;
+    cslib)  step_cslib ;;
     venvs)  step_venvs ;;
     rg)     step_rg ;;
     claude) step_claude ;;
     codex)  step_codex ;;
     doctor) step_doctor ;;
-    *) die "unknown step '$step' (all|deps|sync|lean|venvs|rg|claude|codex|doctor)" ;;
+    *) die "unknown step '$step' (all|deps|sync|lean|cslib|venvs|rg|claude|codex|doctor)" ;;
   esac
 done

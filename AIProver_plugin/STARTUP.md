@@ -29,7 +29,7 @@ Three things. The check in §1 tests each one directly rather than inferring it.
 | component | what it is | needs |
 |---|---|---|
 | **AIProver model** | our fine-tuned Leanstral-1.5-class model on vLLM | reachable over SSH (§2) |
-| **AIProver agent** | the evolved hevo harness (`harness/harness.py`, champion `d01_r04`, byte-identical) driving that model through `mistral-vibe` with the 23 `lean-lsp-mcp` tools | vibe venv, MCP venv, Lean 4.23.0 + Mathlib, ripgrep |
+| **AIProver agent** | the evolved hevo harness (`harness/harness.py`, champion `d01_r04` plus the cslib deltas listed in `harness/MANIFEST.json`) driving that model through `mistral-vibe` with the 23 `lean-lsp-mcp` tools | vibe venv, MCP venv, Lean 4.23.0 + Mathlib + cslib, ripgrep |
 | **coding agent** | Claude Code or Codex with the `aiprover-autoformalize` skill + the same lean-lsp tools | plugin/skill installed (§3) |
 
 AIProver runs **on the machine you call it from**. The harness runs directly under the host's
@@ -47,9 +47,14 @@ AIProver_plugin/bin/aiprover doctor --full            # + harness selftest, all 
 AIProver_plugin/bin/aiprover doctor --full --agents   # + asks Claude Code and Codex themselves
 ```
 
-Expected: `13/13 PASS` (quick), `16/16` (`--full`), `18/18` (`--full --agents`).
+Expected: `14/14 PASS` (quick), `17/17` (`--full`), `19/19` (`--full --agents`). With the model
+server down, two rows depend on it (`model endpoint`, and `model thinks` / the live rollout are
+then not run): the quick run reports `13/14` with only `model endpoint` failing.
 The checks cover both kinds of agent. A tool that is installed but broken fails here, even
 after a successful setup:
+- **Libraries.** `cslib built (CS library, same Lean)` asserts the pinned cslib package is built
+  AND declares the project's own toolchain. `lean_local_search reaches the libraries` asserts the
+  ripgrep `--follow` patch in lean-lsp-mcp (§3): without it, name search sees no library at all.
 - **AIProver as an agent.** `harness selftest` checks its environment without a model call.
   `AIProver live rollout + its tools` runs a real rollout on a one-line theorem. It PASSes only
   if the answer verifies AND the model made lean-lsp calls with zero failures.
@@ -60,7 +65,7 @@ after a successful setup:
   calls lean-lsp` has Codex make an actual lean-lsp call.
 
 `--full` shows two known, harmless notes:
-- `harness selftest ... 59/60 ... (known under host execution: 'mathlib read-only')`: the
+- `harness selftest ... 60/61 ... (known under host execution: 'mathlib read-only')`: the
   selftest asserts the container's read-only Mathlib mount. On the host it just means this user
   may write the shared Lean project (see §6).
 - `lean_state_search` as a hosted-service WARN: an external premise-search service that
@@ -141,7 +146,8 @@ installed and logged in.
 cd AIProver_plugin
 $EDITOR aiprover.toml          # [endpoint] per §2; [paths] where things live / should be built
 ./setup.sh                     # everything; or step by step:
-./setup.sh deps                #   elan + Lean v4.23.0, Mathlib v4.23.0 project + REPL, both venvs, ripgrep
+./setup.sh deps                #   elan + Lean v4.23.0, Mathlib v4.23.0 project + REPL, cslib, both venvs, ripgrep
+./setup.sh cslib               #   add + build the pinned cslib package in an existing project (~15 s)
 ./setup.sh claude              #   Claude Code plugin (skill + lean-lsp MCP), user scope
 ./setup.sh codex               #   Codex: skill -> ~/.agents/skills, MCP server 'lean-lsp' in ~/.codex/config.toml
 ./setup.sh doctor              #   = bin/aiprover doctor --full --agents
@@ -151,8 +157,9 @@ What each step does, so you can do or check it by hand:
 | step | does | verified by doctor as |
 |---|---|---|
 | Lean | elan; `leanprover/lean4:v4.23.0`; a project from `setup/lean_project/` (Mathlib `v4.23.0` + Lean REPL, the exact manifest the champion used), `lake exe cache get`, `lake build repl` | lean project built / toolchain / REPL / canary compiles |
+| cslib | appends the `require cslib` pin and manifest entry from `setup/lean_project/` to the project (if absent), lifts the read-only bit on `.lake/packages` for the build only, `lake build cslib/Cslib`, re-locks, and asserts cslib's `lean-toolchain` equals the project's. The pinned commit (`cd368e6`, cslib's last on Lean v4.23.0) declares mathlib `37df177aaa` and batteries `d117e2c28c` -- exactly this project's revisions -- so nothing else is fetched or rebuilt | cslib built (CS library, same Lean) |
 | vibe venv | `pip install -r setup/requirements-vibe.lock` (mistral-vibe 2.24.2, the harness's agent loop) | vibe (harness agent loop) |
-| MCP venv | `pip install -r setup/requirements-mcp.lock` (lean-lsp-mcp 0.30.0), then relaxes leanclient's `MIN_LEAN_VERSION` to (4, 23) and deletes the stale `.pyc` | lean-lsp-mcp + leanclient patch |
+| MCP venv | `pip install -r setup/requirements-mcp.lock` (lean-lsp-mcp 0.30.0), then three patches: relaxes leanclient's `MIN_LEAN_VERSION` to (4, 23); warms the scratch pools with `import Mathlib`; adds `--follow` to `lean_local_search`'s ripgrep so it traverses the `.lake/packages` symlink both Lean projects use. Each deletes the stale `.pyc` | lean-lsp-mcp + leanclient patch; lean_local_search reaches the libraries |
 | ripgrep | into `[paths].rg_dir` | ripgrep |
 | Claude Code | `claude plugin marketplace add AIProver_plugin` + `claude plugin install aiprover@aiprover-local`; links `~/.config/aiprover/aiprover.toml` (the installed plugin runs from a cache copy and finds the config there) | `claude plugin list` |
 | Codex | symlink `~/.agents/skills/aiprover-autoformalize`; `codex mcp add lean-lsp -- .../scripts/aiprover mcp-serve` with 120 s startup / 600 s tool timeouts | `codex mcp list` |
@@ -161,6 +168,9 @@ What each step does, so you can do or check it by hand:
 Lean < 4.24. We pin 4.23.0 because the agent must compile with the grader's toolchain, and the
 gate is advisory. Unpatched, most lean-lsp tools fail on every call. **Any `pip install` into the
 MCP venv undoes the patch. Re-run `./setup.sh venvs` afterwards.**
+
+`setup.sh` itself needs a Python ≥ 3.11 on `PATH` for its helper scripts; on a box whose
+system `python3` is older, `PATH=~/mcp_env/bin:$PATH ./setup.sh ...` works.
 
 **After editing anything under `claude_code/`, re-run `./setup.sh sync claude`.** `sync` makes
 `codex/` identical (doctor checks this). `claude` reinstalls the plugin, because Claude Code runs
@@ -208,7 +218,7 @@ kept one Vista PP=2 server at 85–95% KV.
 
 | FAIL | meaning | fix |
 |---|---|---|
-| harness is the pinned champion | harness/grader bytes differ from `harness/MANIFEST.json` | restore from git; never edit the harness in place |
+| harness is the pinned champion | harness/grader bytes differ from `harness/MANIFEST.json` | restore from git; never edit the harness in place (a deliberate change must update `harness_sha256` AND `deltas_from_champion` in the manifest) |
 | both skill copies identical | `codex/` drifted from `claude_code/` | `./setup.sh sync` |
 | lean project built / REPL / canary | Mathlib oleans or REPL missing, or Lean broken | `./setup.sh lean`; check `[paths].lean_project`, `elan_home` |
 | check: kernel axiom probe | the completeness check cannot be trusted | Lean/Mathlib broken: fix those first |
@@ -216,6 +226,8 @@ kept one Vista PP=2 server at 85–95% KV.
 | vibe | wrong/missing mistral-vibe | `./setup.sh venvs` |
 | lean-lsp-mcp + leanclient patch | gate not relaxed (often after a pip install) | `./setup.sh venvs` |
 | ripgrep | `lean_local_search` would fail every call | `./setup.sh rg`, set `[paths].rg_dir` |
+| cslib built (CS library, same Lean) | the pinned cslib package is missing, unbuilt, or on another toolchain | `./setup.sh cslib` (needs the project built first; reports the toolchain it found) |
+| lean_local_search reaches the libraries | the ripgrep `--follow` patch is missing (often after a pip install into the MCP venv) | `./setup.sh venvs` |
 | model endpoint | tunnel/handoff/server | `bin/aiprover tunnel up` prints the reason. Dead ControlMaster: re-open per §2. Handoff unreadable: the server job is not up. Local port bound: `tunnel down` or change `local_port` |
 | model thinks | server lacks `--reasoning-parser mistral` | restart vLLM with the §2 flags |
 | harness selftest | anything except `mathlib read-only` | read its FAIL lines: `cd ~/.aiprover/doctor_selftest && <vibe>/bin/python3 <skill>/harness/harness.py selftest` with the env from `aiprover.py:harness_env` |
@@ -238,3 +250,15 @@ kept one Vista PP=2 server at 85–95% KV.
   Jobs themselves cost no frontier tokens.
 - The harness's own context compaction threshold is 200k (the evolved value; the server serves
   1M). It is part of the measured artifact and is left as evolved.
+- **cslib is a snapshot.** The pinned commit is the last one on Lean v4.23.0 (2025-09-15): 29
+  modules, ~500 declarations. cslib on GitHub today has ~250 modules on Lean 4.35; none of that
+  can be imported without moving the whole project, the harness and every measured number to a
+  newer toolchain. `aiprover search` and `lean_local_search` read the pinned snapshot, so what
+  they find is exactly what compiles here.
+- **`probe` is advisory.** `plausible` needs sampling and decidability instances: statements over
+  abstract carriers or ℝ come back `untestable`; `no counterexample` after 100 random tests is
+  not evidence of correctness. Only `COUNTEREXAMPLE` is a verdict (the statement is false).
+- **Hosted search rate limits inside lean-lsp-mcp** (per server process): loogle 3 calls / 30 s,
+  leanfinder 10 / 30 s, state-search and hammer-premise 6 / 30 s, leansearch 90 / 30 s. A burst
+  of `lean_loogle` calls returns rate-limit errors that cost the agent a turn each; the harness
+  prompt steers the model to `lean_local_search` first.
