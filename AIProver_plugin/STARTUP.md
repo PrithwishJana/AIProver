@@ -250,6 +250,11 @@ kept one Vista PP=2 server at 85–95% KV.
   Jobs themselves cost no frontier tokens.
 - The harness's own context compaction threshold is 200k (the evolved value; the server serves
   1M). It is part of the measured artifact and is left as evolved.
+- **Turn and time budget.** `[runtime].max_turns = 200` and `timeout_sec = 10800` are DEFAULTS
+  above the champion's measured 100 / 5400 s; the harness's time fences (search withdrawn,
+  finalize, soft notice) scale with each job's timeout at the champion's ratios, so a job keeps
+  the same landing behaviour at any size. Numbers quoted for AIProver were measured at 100 turns;
+  `submit --max-turns 100 --timeout 5400` reproduces that setting exactly.
 - **cslib is a snapshot.** The pinned commit is the last one on Lean v4.23.0 (2025-09-15): 29
   modules, ~500 declarations. cslib on GitHub today has ~250 modules on Lean 4.35; none of that
   can be imported without moving the whole project, the harness and every measured number to a

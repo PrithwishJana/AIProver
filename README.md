@@ -1,6 +1,6 @@
 # AIProver
 
-AIProver turns a natural-language theorem **and its proof** into a Lean 4 file that compiles, has
+AIProver auto-formalizes a natural-language theorem **and its proof** into a Lean 4 file that compiles, has
 no `sorry`, states exactly that theorem and follows that proof. It is a fine-tuned Leanstral-class
 prover driven by an evolved agentic harness (Lean 4.23.0, Mathlib, cslib, the lean-lsp tools),
 packaged so it can be used in three ways:
@@ -23,7 +23,7 @@ model available, Lean work goes to the specialist.
 |---|---|---|
 | **You** | your terminal | supply the theorem and its proof in the two tagged blocks; in standalone mode you are also the judge |
 | **Coding agent** (Claude Code or Codex, on your own subscription) | your machine | reads the text, rewrites the proof as explicit steps, decides what to delegate, judges every candidate for faithfulness, decomposes, weaves, and gates the final file. Never grinds through tactic search itself |
-| **AIProver** (the Leanstral-class prover inside its evolved harness) | the GPU server | turns a problem into a Lean file: writes, compiles, searches Mathlib and cslib, reads goals and repairs, for up to 100 turns per call. Returns candidates; cannot be trusted to judge its own statement |
+| **AIProver** (the Leanstral-class prover inside its evolved harness) | the GPU server | auto-formalizes a problem into a Lean file: writes, compiles, searches Mathlib and cslib, reads goals and repairs, for up to 200 turns per call. Returns candidates; cannot be trusted to judge its own statement |
 | **Mechanical checks** (`check`, `probe`, lean-lsp) | your machine | kernel-level compile and completeness, counterexample search on statements, goals and diagnostics. Decide (a) and (b); screen (c) |
 
 For the example above, in Claude Code: the agent runs `doctor`, writes the problem file, expands

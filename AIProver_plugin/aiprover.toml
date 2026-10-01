@@ -45,10 +45,16 @@ work_root = "~/.aiprover"
 # Concurrent AIProver rollouts on THIS machine (global, across agents). Each holds a Lean
 # server (~1.5 GB) and compiles peak ~5 GB.
 max_parallel = 8
-# Per-rollout wall clock (s). The harness lands its answer by ~3700 s on its own.
-timeout_sec = 5400
-# The harness's turn budget. 100 is the champion's own value.
-max_turns = 100
+# Per-rollout wall clock (s) and the harness's turn budget. The champion was MEASURED at
+# max_turns = 100 / timeout_sec = 5400 (its own fences: search withdrawn at 3700 s, soft notice at
+# 2900 s). Its evidence: at a 90-turn cap 24% of runs were truncated and scored 0.195 against 0.608
+# for the rest, while only 2 of 182 solved runs ever hit the cap -- extra turns serve the failing
+# tail, in particular the runs holding a correct statement with an unfinished proof. One turn is
+# roughly one tool call, so a bigger turn budget needs a bigger clock: the harness's time fences
+# are derived from timeout_sec at the champion's ratios (hard 3700/5400, soft 2900/5400), so the
+# two numbers below stay coherent and `submit --timeout/--max-turns` overrides stay coherent too.
+timeout_sec = 10800
+max_turns = 200
 
 
 [paths]

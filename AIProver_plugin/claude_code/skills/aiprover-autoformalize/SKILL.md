@@ -23,7 +23,9 @@ and you are the judge. A file that compiles is not an answer.
 ## Who does what
 
 **AIProver** = our fine-tuned Leanstral model inside the evolved hevo harness (champion
-`d01_r04`). One call is a full agentic Lean session of up to 100 turns: it writes the file,
+`d01_r04`). One call is a full agentic Lean session of up to 200 turns (the champion was measured
+at 100; the extra budget serves runs that hold a correct statement with an unfinished proof): it
+writes the file,
 compiles it, searches Mathlib, reads goals and repairs, with the lean-lsp tools. It is strong at
 writing Lean and closing proofs. On 509 hard training problems it produced a solved, faithful
 formalization in 205 cases -- and in **173 more its file compiled but stated the WRONG theorem**.
@@ -58,7 +60,8 @@ $AIP workspace --new NAME          # path for YOUR Lean file inside the lean-lsp
 $AIP status | list | cancel JOB
 ```
 
-- A job runs `-k` independent AIProver samples in parallel, typically 5-40 min each (up to 90).
+- A job runs `-k` independent AIProver samples in parallel, typically 5-40 min each (up to 180
+  at the default 3 h cap; `--max-turns`/`--timeout` set a job's own budget).
   **Run `wait` as a normal foreground command with the Bash timeout set to 600000 ms**, and repeat
   it while it returns rc 3. Nothing is lost between waits; jobs run detached.
 - Sample status, best first: `verified` (passes (a)+(b); still needs YOUR (c)/(d) judgement),

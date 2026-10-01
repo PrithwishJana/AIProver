@@ -4,8 +4,9 @@
 AIProver = our fine-tuned Leanstral-class model DRIVEN BY the evolved hevo harness
 (`../harness/harness.py`, champion d01_r04 of hevo_mixed_v1). Every call is a full agentic
 Lean session -- the model writes, compiles, searches Mathlib and repairs through lean-lsp-mcp,
-for up to 100 turns -- not a single completion. A call takes minutes (median ~13 min, p90
-~40 min), so calls are JOBS: submitted, run detached, waited on, read.
+for up to 200 turns by default (`[runtime].max_turns`, `submit --max-turns`) -- not a single
+completion. A call takes minutes (median ~13 min, p90 ~40 min at the champion's 100-turn
+setting), so calls are JOBS: submitted, run detached, waited on, read.
 
     aiprover doctor [--full]                 verify the whole environment (run this first)
     aiprover submit --problem P.txt ...      start a job; prints its id and returns at once
@@ -1550,6 +1551,24 @@ def harness_env(cfg: Config, ws: Path, api: str, model: str) -> dict:
     return env
 
 
+# The champion was measured with max_turns 100, a 5400 s kill and fences at 3700 s (search and
+# shell withdrawn, finalize) and 2900 s (soft notice). A turn is about one tool call, so a bigger
+# turn budget needs a proportionally bigger clock or the time fences fire first and the extra
+# turns never happen. The fences therefore scale with THIS job's timeout at the champion's
+# ratios; at timeout_sec 5400 they reproduce the champion's numbers exactly. AGENT_MAX_TURNS keeps
+# the prompt's "you have about N turns" in step with the --max-turns the loop enforces.
+CHAMPION_KILL, CHAMPION_HARD, CHAMPION_SOFT = 5400, 3700, 2900
+
+
+def budget_env(req: dict) -> dict[str, str]:
+    kill = max(60, int(req.get("timeout_sec") or CHAMPION_KILL))
+    hard = int(kill * CHAMPION_HARD / CHAMPION_KILL)
+    soft = int(kill * CHAMPION_SOFT / CHAMPION_KILL)
+    return {"AGENT_MAX_TURNS": str(int(req.get("max_turns") or 100)),
+            "AGENT_RESERVE_HARD": str(hard), "AGENT_RESERVE_SOFT": str(soft),
+            "AGENT_FINALIZE_DEADLINE": str(hard)}
+
+
 # Run INSIDE the harness's own interpreter and environment: import it exactly as a rollout does
 # and list every absolute path it resolved, so "no hardcoded cluster path survives" is measured.
 _PATH_AUDIT = r"""
@@ -1626,6 +1645,7 @@ def run_sample(cfg: Config, jobdir: Path, i: int, req: dict, stop: threading.Eve
                 (ws / stale).unlink(missing_ok=True)
             shutil.rmtree(ws / "proj", ignore_errors=True)
             env = harness_env(cfg, ws, api, model)
+            env.update(budget_env(req))
             cmd = [str(cfg.venv_python("vibe_venv")), str(HARNESS), "agent",
                    "--api-base", api, "--max-turns", str(req["max_turns"])]
             t0 = time.time()
