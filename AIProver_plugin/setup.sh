@@ -207,19 +207,11 @@ if "warm_text" not in s:
     open(scratch, "w").write(s)
 c = open(cu).read()
 if "warm_text" not in c:
-    m = re.search(r'name_prefix="_mcp_serial" if serial else "_mcp_scratch",
-        \)
-', c)
+    m = re.search(r'name_prefix="_mcp_serial" if serial else "_mcp_scratch",\n        \)\n', c)
     assert m, "client_utils.py anchor not found"
-    c = c[:m.end()] + '        pool.warm_text = os.environ.get("LEAN_SCRATCH_WARM_HEADER", "import Mathlib\n")
-' + c[m.end():]
-    if "
-import os
-" not in c:
-        c = c.replace("import asyncio
-", "import asyncio
-import os
-", 1)
+    c = c[:m.end()] + '        pool.warm_text = os.environ.get("LEAN_SCRATCH_WARM_HEADER", "import Mathlib\\n")\n' + c[m.end():]
+    if "\nimport os\n" not in c:
+        c = c.replace("import asyncio\n", "import asyncio\nimport os\n", 1)
     open(cu, "w").write(c)
 PYEOF
     rm -f "$(dirname "$SCRATCH")"/__pycache__/scratch.*.pyc "$(dirname "$CLIENT_UTILS")"/__pycache__/client_utils.*.pyc

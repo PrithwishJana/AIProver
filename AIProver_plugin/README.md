@@ -40,6 +40,18 @@ on `PATH` (`PATH=~/mcp_env/bin:$PATH ./setup.sh ...` works on a box whose system
 You supply **where the model is** (an IP/host to SSH into, and the model's port). Everything
 else is set up and checked for you.
 
+**0. Start the model server** (skip if someone already runs one for you). Give it the model
+directory (`params.json`, `tekken.json`, `consolidated-*.safetensors`):
+```bash
+serve/serve_aiprover.sh /path/to/aiprover_model     # vLLM with the flags the harness needs; port 8041
+```
+The weights are FP8, ~112 GB, so the GPUs must hold well over that in total. On one node with
+enough GPUs the script is all you need (`TP`, `PP`, `PORT` are environment variables, `DRY_RUN=1`
+prints the command). With one GPU per node (TACC Vista GH200), use pipeline-parallel across two
+nodes instead: `sbatch -A <allocation> --export=ALL,MODEL=...,CONTAINER=...,RAYENV=...
+serve/serve_vista_pp2.slurm` (its header explains the three variables). Either way the server
+answers as `aiprover-model`; step 1 tells the CLI where to find it.
+
 **1. Edit `aiprover.toml`, `[endpoint]`.** The current server:
 
 | | value |
@@ -111,6 +123,7 @@ Needs: Linux, Python 3.12, git, curl, ~10 GB disk (Mathlib), `claude` and/or `co
 | `…/SKILL.md` | the procedure: delegate → judge (a)–(d) → decompose → weave → final gate |
 | `…/references/playbook.md` | worked decomposition; AIProver's measured failure modes; the rigor pass; reading `probe`; lemma extraction; search order; tactic rules |
 | `…/harness/` | the champion harness (+ the cslib deltas) and its grader, pinned by sha256 in `MANIFEST.json` |
+| `serve/` | `serve_aiprover.sh` (vLLM with the harness's flags, any node with enough GPUs) and `serve_vista_pp2.slurm` (2-node pipeline-parallel on Slurm) |
 | `setup/` | lock files for both venvs; the Lean project's exact lakefile/manifest (Mathlib + REPL + cslib pins) |
 | `smoke/step1_smoke.py` | end-to-end: one problem through a real agent, with step1's prompt and answer extraction |
 

@@ -80,6 +80,9 @@ ls -l ~/.agents/skills/aiprover-autoformalize       # -> AIProver_plugin/codex/s
 
 ## 2. The model endpoint (`[endpoint]` in `aiprover.toml`)
 
+Starting the server itself: `serve/serve_aiprover.sh /path/to/aiprover_model` (or
+`serve/serve_vista_pp2.slurm` on Slurm); the flags it uses are the ones the harness needs.
+
 The CLI opens the SSH tunnel itself, checks it on every call, and re-opens it if it drops.
 Nothing needs to stay running. Pick the setup that matches where the model is served:
 

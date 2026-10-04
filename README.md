@@ -48,14 +48,17 @@ subscription inside a session, the AIProver server when standalone.
 
 Follow [`AIProver_plugin/README.md`](AIProver_plugin/README.md) ("Quick start"). In short:
 
-1. `cd AIProver_plugin` and edit `aiprover.toml`: `[endpoint]` says where the model server is
+1. Start the model server (skip if one is already running): `AIProver_plugin/serve/serve_aiprover.sh
+   /path/to/aiprover_model`. It runs vLLM with the exact flags the harness needs; on Slurm
+   clusters with one GPU per node use `serve/serve_vista_pp2.slurm` (see the header of each).
+2. `cd AIProver_plugin` and edit `aiprover.toml`: `[endpoint]` says where the model server is
    (an SSH host and the vLLM port, or a direct `api_base`), `[paths]` where Lean, the venvs and
    ripgrep live or should be built.
-2. `./setup.sh` -- installs what is missing (elan + Lean 4.23.0, Mathlib, cslib, two Python venvs,
+3. `./setup.sh` -- installs what is missing (elan + Lean 4.23.0, Mathlib, cslib, two Python venvs,
    ripgrep), installs the Claude Code plugin and the Codex skill, and ends with
    `bin/aiprover doctor --full --agents`. All rows `PASS` means every layer works for real.
    Already installed and updating? See "Startup after updating" in the same README.
-3. Any time later: `bin/aiprover doctor` (about 40 s). If a row fails,
+4. Any time later: `bin/aiprover doctor` (about 40 s). If a row fails,
    [`AIProver_plugin/STARTUP.md`](AIProver_plugin/STARTUP.md) §5 maps it to its fix.
 
 ## 2. Write the problem
