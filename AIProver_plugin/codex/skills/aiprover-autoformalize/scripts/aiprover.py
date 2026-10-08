@@ -1623,7 +1623,32 @@ RANK = {"verified": 0, "sorry": 1, "rejected": 2, "error": 3, "empty": 4, "infra
         "cancelled": 6}
 
 
-def run_sample(cfg: Config, jobdir: Path, i: int, req: dict, stop: threading.Event) -> None:
+# Statuses of a sample whose session was cut off rather than finished: `aiprover resume`
+# continues these sessions.
+RESUMABLE = ("infra", "cancelled")
+
+
+# Resumptions of a session after infrastructure faults (lost endpoint, protocol rejection),
+# and the pause before each, which outlasts a restart of the proxy or tunnel.
+INFRA_RESUMES = 3
+INFRA_RESUME_DELAY = 30
+
+
+def saved_session(ws: Path) -> str | None:
+    """Id of the vibe session saved in a sample workspace: the one with the most messages,
+    since a retry after a lost server may have opened a short session of its own."""
+    sessions = [_read_json(meta) for meta in
+                (ws / ".vibe" / "logs" / "session").glob("session_*/meta.json")]
+    sessions = [m for m in sessions if m.get("session_id") and m.get("total_messages")]
+    if not sessions:
+        return None
+    return max(sessions, key=lambda m: m["total_messages"])["session_id"]
+
+
+def run_sample(cfg: Config, jobdir: Path, i: int, req: dict, stop: threading.Event,
+               resume: bool = False) -> None:
+    """One rollout. With `resume`, the sample's saved session continues (its conversation,
+    Work.lean and clock) instead of starting over; so does a retry after an infra failure."""
     ws = jobdir / f"s{i}"
     st_path = ws / "state.json"
     _write_json(st_path, {"state": "queued"})
@@ -1641,11 +1666,21 @@ def run_sample(cfg: Config, jobdir: Path, i: int, req: dict, stop: threading.Eve
             except AIProverError as e:
                 _write_json(st_path, {"state": "done", "status": "infra", "error": str(e)})
                 return
-            for stale in ("result.json", "solution.lean", ".hevo_state.json", ".hevo_ticks"):
+            session = saved_session(ws) if resume else None
+            # Time spent in earlier runs of this sample, carried across resumptions.
+            before = float(_read_json(ws / "resume.json").get("elapsed") or 0) if session else 0.0
+            stale_files = ("result.json", "solution.lean") if session else (
+                "result.json", "solution.lean", ".hevo_state.json", ".hevo_ticks", "resume.json")
+            for stale in stale_files:
                 (ws / stale).unlink(missing_ok=True)
-            shutil.rmtree(ws / "proj", ignore_errors=True)
+            if not session:
+                shutil.rmtree(ws / "proj", ignore_errors=True)
             env = harness_env(cfg, ws, api, model)
             env.update(budget_env(req))
+            if session:
+                env.update(AGENT_RESUME_SESSION=session, AGENT_RESUME_ELAPSED=str(before))
+                (ws / "agent.log").open("a").write(f"\n[aiprover] resuming session {session} "
+                                                   f"after {before:.0f}s\n")
             cmd = [str(cfg.venv_python("vibe_venv")), str(HARNESS), "agent",
                    "--api-base", api, "--max-turns", str(req["max_turns"])]
             t0 = time.time()
@@ -1658,7 +1693,7 @@ def run_sample(cfg: Config, jobdir: Path, i: int, req: dict, stop: threading.Eve
                 while p.poll() is None:
                     if stop.is_set():
                         break
-                    if time.time() - t0 > req["timeout_sec"]:
+                    if before + time.time() - t0 > req["timeout_sec"]:
                         timed_out = True
                         break
                     time.sleep(5)
@@ -1670,6 +1705,8 @@ def run_sample(cfg: Config, jobdir: Path, i: int, req: dict, stop: threading.Eve
                         break
                     time.sleep(3)
                 p.wait()
+            elapsed = before + time.time() - t0
+            _write_json(ws / "resume.json", {"elapsed": elapsed})
             if stop.is_set():
                 _write_json(st_path, {"state": "done", "status": "cancelled"})
                 return
@@ -1678,22 +1715,36 @@ def run_sample(cfg: Config, jobdir: Path, i: int, req: dict, stop: threading.Eve
             infra = res.get("infra_failure") or g.infra_failure(res.get("agent_error"), "")
             answer_path = ws / "proj" / "Work.lean"
             answer = answer_path.read_text(errors="replace") if answer_path.is_file() else ""
-            if infra and not answer.strip() and attempts < 2:
-                (ws / "agent.log").open("a").write(f"\n[aiprover] infra failure, retrying: "
-                                                   f"{infra}\n")
-                continue
             chk = check_lean(cfg, answer, statement_only=req["statement_only"],
                              work=ws, label=f"s{i}.lean") if answer.strip() else {
                 "verdict": "FAIL", "compiles": False, "complete": False,
                 "problems": ["no answer written"], "warnings": [], "axioms": {},
                 "diagnostics": ""}
-            status = "infra" if (infra and not answer.strip()) else _classify(
-                chk, req["statement_only"], answer)
+            # An infrastructure fault says nothing about the problem: unless the answer
+            # already verifies, the saved session continues where it stopped.
+            infra_cut = infra and chk["verdict"] != "PASS"
+            if infra_cut and not timed_out and attempts <= INFRA_RESUMES:
+                (ws / "agent.log").open("a").write(f"\n[aiprover] infra failure, resuming: "
+                                                   f"{infra}\n")
+                resume = True
+                if stop.wait(INFRA_RESUME_DELAY):
+                    _write_json(st_path, {"state": "done", "status": "cancelled"})
+                    return
+                continue
+            status = "infra" if infra_cut else _classify(chk, req["statement_only"], answer)
             fixed = ""
             for f in ("context.lean", "statement.lean"):
                 if (jobdir / f).is_file():
                     fixed += (jobdir / f).read_text() + "\n"
             missing = preserved(fixed, answer) if fixed and answer.strip() else []
+            # A compiling answer that drops or alters the target theorem proves
+            # something else, so it is not verified.
+            target = jobdir / "statement.lean"
+            if (status == "verified" and not req["statement_only"] and target.is_file()
+                    and preserved(target.read_text(), answer)):
+                status = "rejected"
+                chk["verdict"] = "FAIL"
+                chk["problems"].append("target statement not reproduced verbatim")
             if answer.strip():
                 shutil.copy2(answer_path, jobdir / f"s{i}.lean")
             summary = {
@@ -1704,7 +1755,7 @@ def run_sample(cfg: Config, jobdir: Path, i: int, req: dict, stop: threading.Eve
                 "fixed_code_preserved": (not missing) if fixed else None,
                 "fixed_code_missing": missing,
                 "timed_out": timed_out,
-                "elapsed_sec": round(time.time() - t0, 1),
+                "elapsed_sec": round(elapsed, 1),
                 "turns": res.get("history_entries"),
                 "tool_calls": res.get("tool_calls"),
                 "stop_reason": res.get("stop_reason"),
@@ -1722,15 +1773,19 @@ def run_sample(cfg: Config, jobdir: Path, i: int, req: dict, stop: threading.Eve
         slot.close()
 
 
-def cmd_worker(cfg: Config, jobdir: Path) -> int:
+def cmd_worker(cfg: Config, jobdir: Path, resume: bool = False) -> int:
+    """Run the job's samples; with `resume`, only those `aiprover resume` re-queued, each
+    continuing its saved session."""
     req = _read_json(jobdir / "request.json")
     stop = threading.Event()
 
     def _term(*_):
         stop.set()
     signal.signal(signal.SIGTERM, _term)
-    threads = [threading.Thread(target=run_sample, args=(cfg, jobdir, i, req, stop))
-               for i in range(req["samples"])]
+    samples = [i for i in range(req["samples"])
+               if not resume or _read_json(jobdir / f"s{i}" / "state.json").get("state") == "queued"]
+    threads = [threading.Thread(target=run_sample, args=(cfg, jobdir, i, req, stop, resume))
+               for i in samples]
     for t in threads:
         t.start()
     for t in threads:
@@ -1863,6 +1918,46 @@ def cmd_result(cfg: Config, a: argparse.Namespace) -> int:
             print(f"----- check PASS with warnings: {c.get('warnings')}")
     if not b.get("lean_file"):
         print("\nno sample produced a Lean file.")
+    return 0
+
+
+def cmd_resume(cfg: Config, a: argparse.Namespace) -> int:
+    """Continue a job whose sessions were cut off (statuses in RESUMABLE, an infra failure in
+    their summary, or left running by a worker that died): those samples resume their saved
+    sessions; finished samples keep their results. `--timeout` and `--max-turns` replace the job's budgets."""
+    d = _job_dir(cfg, a.job)
+    if _pid_alive(_read_json(d / "worker.json").get("pid")):
+        raise AIProverError(f"job {d.name} is still running")
+    req = _read_json(d / "request.json")
+    if a.timeout:
+        req["timeout_sec"] = int(a.timeout)
+    if a.max_turns:
+        req["max_turns"] = int(a.max_turns)
+    _write_json(d / "request.json", req)
+    resumed = []
+    for i in range(req.get("samples", 0)):
+        st = _read_json(d / f"s{i}" / "state.json")
+        # A session cut off by a lost server may have left code and been graded; its
+        # summary records the infra failure.
+        cut_off = bool(_read_json(d / f"s{i}" / "summary.json").get("infra"))
+        if st.get("state") != "done" or st.get("status") in RESUMABLE or cut_off:
+            _write_json(d / f"s{i}" / "state.json", {"state": "queued"})
+            (d / f"s{i}" / "summary.json").unlink(missing_ok=True)
+            resumed.append(i)
+    print(d.name)
+    if not resumed:
+        print("  nothing to resume", file=sys.stderr)
+        return 0
+    (d / "result.json").unlink(missing_ok=True)
+    log = open(d / "worker.log", "ab")
+    p = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_worker", str(d),
+                          "--resume"],
+                         stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                         start_new_session=True, close_fds=True,
+                         env={**os.environ, "AIPROVER_CONFIG": str(cfg.path)})
+    _write_json(d / "worker.json", {"pid": p.pid, "started": time.time()})
+    if not a.quiet:
+        print(f"  resuming sample(s) {resumed}", file=sys.stderr)
     return 0
 
 
@@ -2292,6 +2387,11 @@ def main(argv: list[str] | None = None) -> int:
     li.add_argument("-n", type=int, default=20)
     ca = sub.add_parser("cancel")
     ca.add_argument("job")
+    rs = sub.add_parser("resume", help="continue a job's cut-off sessions where they stopped")
+    rs.add_argument("job")
+    rs.add_argument("--timeout", type=int, help="new per-rollout wall seconds")
+    rs.add_argument("--max-turns", type=int, help="new harness turn budget")
+    rs.add_argument("--quiet", "-q", action="store_true")
 
     c = sub.add_parser("check", help="mechanical checks (a)+(b) on a Lean file")
     c.add_argument("file")
@@ -2363,6 +2463,7 @@ def main(argv: list[str] | None = None) -> int:
     cf.add_argument("--shell", action="store_true", help="KEY=VALUE lines for scripts")
     wk = sub.add_parser("_worker")
     wk.add_argument("jobdir")
+    wk.add_argument("--resume", action="store_true")
     sub.add_parser("_mcp_smoke")
 
     a = ap.parse_args(argv)
@@ -2393,6 +2494,7 @@ def main(argv: list[str] | None = None) -> int:
             "status": lambda: cmd_status(cfg, a),
             "list": lambda: cmd_list(cfg, a),
             "cancel": lambda: cmd_cancel(cfg, a),
+            "resume": lambda: cmd_resume(cfg, a),
             "check": lambda: cmd_check(cfg, a),
             "probe": lambda: cmd_probe(cfg, a),
             "search": lambda: cmd_search(cfg, a),
@@ -2404,7 +2506,7 @@ def main(argv: list[str] | None = None) -> int:
             "workspace": lambda: cmd_workspace(cfg, a),
             "doctor": lambda: cmd_doctor(cfg, a),
             "mcp-serve": lambda: cmd_mcp_serve(cfg, a),
-            "_worker": lambda: cmd_worker(cfg, Path(a.jobdir)),
+            "_worker": lambda: cmd_worker(cfg, Path(a.jobdir), a.resume),
             "_mcp_smoke": lambda: cmd_mcp_smoke(cfg),
         }[a.cmd]()
     except AIProverError as e:
