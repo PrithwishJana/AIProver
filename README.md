@@ -1,18 +1,25 @@
 # AIProver
 
+<p align="center">
+  <a href="https://arxiv.org/abs/2610.05367"><img alt="Paper" src="https://img.shields.io/badge/Paper-arXiv%3A2610.05367-b31b1b.svg"></a>
+  <a href="https://jprithwish.github.io/AIProver/"><img alt="Project page" src="https://img.shields.io/badge/Project-Page-1f6feb.svg"></a>
+  <a href="https://huggingface.co/prithwish-jana/aiprover-119b"><img alt="Model" src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-aiprover--119b-ffcc4d.svg"></a>
+  <a href="LICENSE"><img alt="License: AGPL v3" src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg"></a>
+</p>
+
 AIProver auto-formalizes a natural-language theorem **and its proof** into a Lean 4 file that compiles, has
 no `sorry`, states exactly that theorem and follows that proof. It is a fine-tuned Leanstral-class
 prover driven by an evolved agentic harness (Lean 4.23.0, Mathlib, cslib, the lean-lsp tools),
 packaged so it can be used in three ways:
 
-| mode | what you run | who judges the result |
+| mode | what the user runs | who judges the result |
 |---|---|---|
-| **standalone** | `bin/aiprover` (submit / wait / result / check / probe / search) | you |
+| **standalone** | `bin/aiprover` (submit / wait / result / check / probe / search) | the user |
 | **Claude Code plugin** | Claude Code with the `aiprover-autoformalize` skill | Claude Code: plans, delegates Lean work to AIProver, judges faithfulness, decomposes and weaves |
 | **Codex skill** | Codex with the same skill | Codex, likewise |
 
 Everything lives in [`AIProver_plugin/`](AIProver_plugin/). The model itself runs on a GPU server
-you point the plugin at; the harness, the Lean toolchain and the tools run on your machine.
+the plugin is pointed at; the harness, the Lean toolchain and the tools run on the user's machine.
 
 ## How it works
 
@@ -21,10 +28,10 @@ model available, Lean work goes to the specialist.
 
 | party | runs where | does |
 |---|---|---|
-| **You** | your terminal | supply the theorem and its proof in the two tagged blocks; in standalone mode you are also the judge |
-| **Coding agent** (Claude Code or Codex, on your own subscription) | your machine | reads the text, rewrites the proof as explicit steps, decides what to delegate, judges every candidate for faithfulness, decomposes, weaves, and gates the final file. Never grinds through tactic search itself |
+| **The user** | their terminal | supplies the theorem and its proof in the two tagged blocks; in standalone mode is also the judge |
+| **Coding agent** (Claude Code or Codex, on the user's own subscription) | the user's machine | reads the text, rewrites the proof as explicit steps, decides what to delegate, judges every candidate for faithfulness, decomposes, weaves, and gates the final file. Never grinds through tactic search itself |
 | **AIProver** (the Leanstral-class prover inside its evolved harness) | the GPU server | auto-formalizes a problem into a Lean file: writes, compiles, searches Mathlib and cslib, reads goals and repairs, for up to 200 turns per call. Returns candidates; cannot be trusted to judge its own statement |
-| **Mechanical checks** (`check`, `probe`, lean-lsp) | your machine | kernel-level compile and completeness, counterexample search on statements, goals and diagnostics. Decide (a) and (b); screen (c) |
+| **Mechanical checks** (`check`, `probe`, lean-lsp) | the user's machine | kernel-level compile and completeness, counterexample search on statements, goals and diagnostics. Decide (a) and (b); screen (c) |
 
 For the example above, in Claude Code: the agent runs `doctor`, writes the problem file, expands
 the three-line proof into numbered steps (base case, inductive step, the inner commutation
@@ -38,11 +45,11 @@ Had neither passed, the agent would freeze a skeleton (the statement, the inner 
 `sorry`), submit the lemma and the main step as separate jobs with the statements fixed, extract
 any stuck step as a lemma of its own, weave the proofs back and gate the result.
 
-Standalone, the same loop runs with you in the agent's seat: `expand` and `backtranslate` give
-you the written-out proof and the plain-English reading, `probe` and `check` the mechanical
+Standalone, the same loop runs with the user in the agent's seat: `expand` and `backtranslate`
+give the written-out proof and the plain-English reading, `probe` and `check` the mechanical
 verdicts, `search` and `extract` the library lookups and the lemma extraction. These three
-LLM-backed helpers always use the model of the mode you are in: Claude Code's or Codex's on your
-subscription inside a session, the AIProver server when standalone.
+LLM-backed helpers always use the model of the mode in use: Claude Code's or Codex's on the
+user's subscription inside a session, the AIProver server when standalone.
 
 ## 1. Set up
 
@@ -104,11 +111,11 @@ bin/aiprover extract ~/.aiprover/jobs/JOB/s0.lean --line 27   # a stuck step (a 
 Pieces of a larger problem can be fixed in Lean: `--context defs.lean` (declarations the answer
 must contain verbatim) and `--lean-statement stmt.lean` (the exact statement to prove), plus
 `--hint`/`--hint-file` for guidance. `bin/aiprover --help` and `submit --help` list everything.
-Judging that the Lean says what the text says is yours in this mode: `check` and `probe` are
-mechanical, and `expand`/`backtranslate`/`ask` are drafts to help you read, not verdicts. They
-are answered by the LLM of the mode you are in (`--backend auto`): standalone, that is AIProver's
+Judging that the Lean says what the text says falls to the user in this mode: `check` and `probe`
+are mechanical, and `expand`/`backtranslate`/`ask` are drafts to read, not verdicts. They
+are answered by the LLM of the mode in use (`--backend auto`): standalone, that is AIProver's
 own model over the server, a Lean specialist rather than a frontier model; inside a Claude Code or
-Codex session it is that agent's model on your subscription. `[helpers]` in `aiprover.toml` or
+Codex session it is that agent's model on the user's subscription. `[helpers]` in `aiprover.toml` or
 `--backend aiprover|claude|codex` overrides.
 
 ### With Claude Code
@@ -128,7 +135,7 @@ or non-interactively: `claude -p "$(cat prompt.txt)"` where `prompt.txt` holds t
 Claude Code then runs `doctor`, makes the proof explicit (its own model does the informal work;
 no other LLM or key is involved), submits whole-problem jobs, probes and judges the candidates,
 and -- if none is faithful and complete -- freezes a skeleton, submits one job per lemma,
-extracting stuck steps as lemmas, weaves the proofs back and gates the final file. If you need a specific output
+extracting stuck steps as lemmas, weaves the proofs back and gates the final file. If the result needs a specific output
 format, say so in the prompt (for example: `<formal_proof>` around one ```` ```lean4 ```` fence).
 
 ### With Codex
@@ -145,7 +152,7 @@ skill tells Codex how to wait on jobs cheaply.
 ### What comes back
 
 One self-contained Lean 4 file: `import Mathlib` (and a `Cslib.*` module when the theorem is about
-transition systems, process or lambda calculi, combinatory or linear logic), your definitions,
+transition systems, process or lambda calculi, combinatory or linear logic), the user's definitions,
 the lemmas of the proof and the theorem. The coding agent reports that all four properties hold;
 standalone, `check` certifies the first two and `probe` screens the statement.
 
@@ -161,4 +168,20 @@ standalone, `check` certifies the first two and `probe` screens the statement.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+Copyright (c) 2026 Prithwish Jana. Released under the GNU Affero General Public License v3.0,
+see [LICENSE](LICENSE). The model builds on an Apache-2.0 licensed model; its terms are respected.
+
+## Citation
+
+```bibtex
+@article{jana2026aiprover,
+  title   = {{AIProver}: Agentic Auto-Formalization of Mathematical Research via
+             Certificate-Driven Evolving Harness},
+  author  = {Jana, Prithwish and Hoang, Viet Bach and Luna, Logan and Pati, Viresh and
+             Singirikonda, Akash and Xie, Cy and Carbone, Lisa and Chen, Wuyang and
+             Moreira, Walter and Stubbs, Joe and Vishwanath, Sriram and Ganesh, Vijay},
+  journal = {arXiv preprint arXiv:2610.05367},
+  year    = {2026},
+  url     = {https://arxiv.org/abs/2610.05367}
+}
+```
