@@ -304,7 +304,10 @@ TOOLCALL_PROTOCOL = re.compile(
     r"Expecting property name enclosed in double quotes|"
     r"Unterminated string starting at|"
     r"Expecting ',' delimiter|"
-    r"Extra data: line",
+    r"Extra data: line|"
+    # An assistant message with neither content nor tool calls in the resent history (a
+    # reply stopped by the token cap during reasoning).
+    r"Invalid assistant message",
     re.I)
 
 # Lean itself could not be run. Distinct from "Lean ran and rejected the file", which is a

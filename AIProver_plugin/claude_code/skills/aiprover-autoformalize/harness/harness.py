@@ -2877,6 +2877,7 @@ async def run_problem(api_base: str, problem_text: str, *,
     from vibe.app_server.events import (CallbackRequested, HistoryEntryAdded,
                                         HistoryEntryUpdated)
     from vibe.app_server.local import LocalHarness, LocalHarnessOptions
+    from vibe.app_server._runtime import ResumeSessionIntent
     from vibe.core.config.harness_files import init_harness_files_manager
 
     # LocalHarness is not self-contained: vibe's own entry points initialise this global
@@ -2885,8 +2886,13 @@ async def run_problem(api_base: str, problem_text: str, *,
     # sources their CLI uses -- AGENTS.md and .vibe/ config discovery.
     init_harness_files_manager("user", "project")
 
+    # A resumed session (AGENT_RESUME_SESSION, set by `aiprover resume`) continues the saved
+    # vibe session of this workspace after its run was cut off, typically by a lost model
+    # server: its conversation, Work.lean, tool-call log and clock carry on where they stopped.
+    resume_id = os.environ.get("AGENT_RESUME_SESSION", "").strip()
     make_project()
-    PROBLEM.write_text(problem_text, encoding="utf-8")
+    if not resume_id:
+        PROBLEM.write_text(problem_text, encoding="utf-8")
     # After make_project(): pinned_toolchain() reads the project's lean-toolchain.
     agent_env = export_agent_env()
     # Before importing anything that reads config: VIBE_HOME is resolved at import time in
@@ -2895,7 +2901,8 @@ async def run_problem(api_base: str, problem_text: str, *,
     os.environ.setdefault("VIBE_LOCAL_API_KEY", "EMPTY")
 
     cfg = agent_config(api_base, prompt=prompt, mcp=mcp, max_turns=max_turns, **cfg_kwargs)
-    t0 = time.time()
+    # On resume the clock counts the time already spent, not the time the server was down.
+    t0 = time.time() - (float(os.environ.get("AGENT_RESUME_ELAPSED") or 0) if resume_id else 0)
     # The reserve hook runs as its own process and cannot see this one's clock or config, so
     # both go into the shared state file BEFORE the session opens. Written, not merged into a
     # default, because a hook that guesses the budget would report the wrong number to the model.
@@ -2905,10 +2912,11 @@ async def run_problem(api_base: str, problem_text: str, *,
     # And the tool-call log starts empty. The workspace is per problem, so this is belt and
     # braces -- but a stale byte log would put a fresh run straight into its landing phase,
     # which is the one failure of this mechanism that would be invisible in the record.
-    try:
-        TICKS.unlink(missing_ok=True)
-    except OSError:
-        pass
+    if not resume_id:
+        try:
+            TICKS.unlink(missing_ok=True)
+        except OSError:
+            pass
     # Keyed by entry id, insertion-ordered. An entry is ADDED in its "running" state and
     # then UPDATED in place as the tool executes and the model streams; the first version of
     # this recorded only HistoryEntryAdded, so every effect in every run was serialised
@@ -2924,12 +2932,16 @@ async def run_problem(api_base: str, problem_text: str, *,
     # through a tool call, and a tool call always produces events.
     snaps = Snapshots()
 
-    session = await LocalHarness(LocalHarnessOptions(session_options=cfg)).start()
+    options = (LocalHarnessOptions(session_options=cfg, session=ResumeSessionIntent(resume_id))
+               if resume_id else LocalHarnessOptions(session_options=cfg))
+    session = await LocalHarness(options).start()
     checks = 0
     verifier_stopped = None
     try:
         await session.resources.runtime.wait_until_ready()
         message = TASK
+        if resume_id:
+            message = RESUME_TASK if (PROJECT / "Work.lean").is_file() else RESUME_TASK_LOST
         while True:
             async with aclosing(session.act(message)) as stream:
                 async for event in stream:
@@ -3006,6 +3018,15 @@ async def run_problem(api_base: str, problem_text: str, *,
     res["tool_calls_seen"] = tick_count()        # what the budget policy was reading
     res["snapshots"] = len(snaps.texts)
     return res
+
+
+RESUME_TASK = ("The session was interrupted (the model server restarted) and is now resumed. "
+               "Your conversation so far is above and Work.lean holds what you last wrote. "
+               "Continue the task from where you stopped.")
+RESUME_TASK_LOST = ("The session was interrupted (the model server restarted) and is now "
+                    "resumed. Your conversation so far is above, but Work.lean was lost: write "
+                    "your latest version to Work.lean again, then continue the task from where "
+                    "you stopped.")
 
 
 def _delivery_check() -> str | None:
