@@ -842,6 +842,18 @@ TOOL_DESCRIPTIONS = {
     "lean_leanfinder": "Semantic search for Mathlib theorems from an informal description "
                        "or a proof state." + VERSION_CAVEAT,
 }
+# With AGENT_LEANFINDER_URL set, lean_leanfinder queries a semantic index of THIS project's
+# Mathlib (every declaration with an informal description), so its results exist here and it
+# becomes the first search to try; grep stays for exact text.
+LEANFINDER_URL = os.environ.get("AGENT_LEANFINDER_URL", "")
+LOCAL_LEANFINDER_DESCRIPTION = (
+    "Semantic search over THIS project's own Mathlib: every declaration, with an informal "
+    "description. Give a statement, concept or proof goal in words or Lean (e.g. 'a finite "
+    "union of finite sets is finite', 'h : a < b |- a + c < b + c'); returns declaration names, "
+    "types and modules that exist here. Use it FIRST when looking for a lemma or definition; "
+    "use grep only for exact text. The version argument is ignored.")
+if LEANFINDER_URL:
+    TOOL_DESCRIPTIONS["lean_leanfinder"] = LOCAL_LEANFINDER_DESCRIPTION
 
 
 def agent_config(api_base: str, *, project: Path = PROJECT,
@@ -885,6 +897,8 @@ def agent_config(api_base: str, *, project: Path = PROJECT,
             env["LEAN_STATE_SEARCH_URL"] = state_search_url
         if hammer_url:
             env["LEAN_HAMMER_URL"] = hammer_url
+        if LEANFINDER_URL:
+            env["LEAN_FINDER_URL"] = LEANFINDER_URL
         env["PATH"] = f"{ELAN}/bin:" + os.environ.get("PATH", "")
         # PYTHONPATH must carry BOTH: lean-lsp-mcp's own site-packages and vibe's (already
         # on PYTHONPATH for the harness). Prepending keeps the harness importable too.
@@ -1239,12 +1253,15 @@ TASK = ("Read problem.txt in your working directory. It holds an `<informal_theo
         "ENVIRONMENT -- already set up, do not search the filesystem for any of it:\n"
         "- `lean` on PATH is the pinned toolchain, and LEAN_PATH already resolves Mathlib "
         f"and every dependency. `lean {ANSWER_NAME}` in {PROJECT} compiles against Mathlib "
-        "directly; there is no `lake build` step and you must not run one.\n"
+        "directly; there is no `lake build` step. Never run `lake build`, `lake exe` "
+        "(including `lake exe cache get`), `lake update` or `lake clean`: Mathlib is "
+        "prebuilt and shared with other sessions, and these commands are refused.\n"
         # Interpolated and existence-checked: naming a directory that is not there sends the
         # agent hunting for the real one, which is the behaviour this block exists to prevent.
         + (f"- Mathlib source, for grepping definitions and lemma statements, is at "
            f"{mathlib_source()}. Nothing relevant lives anywhere else, so "
-           "never run `find /`.\n" if mathlib_source() else
+           "never run `find /`. `grep` is ripgrep: write alternation as `a|b`; "
+           "`a\\|b` matches a literal `|` and finds nothing.\n" if mathlib_source() else
            "- Do not search the filesystem for Mathlib source; use the Lean search tools "
            "below, which read this project's own Mathlib.\n")
         # Existence-checked like the Mathlib line above: this bullet appears only when the
@@ -1264,8 +1281,12 @@ TASK = ("Read problem.txt in your working directory. It holds an `<informal_theo
         f"`{MCP_ALIAS}_lean_goal` shows the proof state at a position, "
         f"`{MCP_ALIAS}_lean_diagnostic_messages` gives the errors for the whole file, "
         f"`{MCP_ALIAS}_lean_multi_attempt` tries several tactics at once, and the search "
-        f"tools (`{MCP_ALIAS}_lean_local_search`, `{MCP_ALIAS}_lean_leansearch`, "
-        f"`{MCP_ALIAS}_lean_loogle`) find real Mathlib lemma names.\n\n"
+        + (f"tools find real Mathlib lemma names: `{MCP_ALIAS}_lean_leanfinder` first (semantic "
+           f"search over this project's own Mathlib, by meaning), then "
+           f"`{MCP_ALIAS}_lean_local_search` and `{MCP_ALIAS}_lean_loogle` for names and type "
+           f"patterns.\n\n" if LEANFINDER_URL else
+           f"tools (`{MCP_ALIAS}_lean_local_search`, `{MCP_ALIAS}_lean_leansearch`, "
+           f"`{MCP_ALIAS}_lean_loogle`) find real Mathlib lemma names.\n\n")
         # The dominant failure modes, measured. 1 and 2 come from 146 graded runs (31 primary
         # type mismatches, 30 unknown identifiers). 3 is new this round and comes from the
         # parent's own 300: of the 24 answers that compiled, were not closed by the automation,
@@ -1273,7 +1294,7 @@ TASK = ("Read problem.txt in your working directory. It holds an `<informal_theo
         # formalized a PARENTHETICAL GLOSS in place of the notion the text had just named --
         # 54% of that band, against 13% of the 204 solved answers. It is the single most
         # discriminating property found between the two cohorts.
-        "THREE MISTAKES THAT ACCOUNT FOR MOST FAILURES HERE:\n"
+        + "THREE MISTAKES THAT ACCOUNT FOR MOST FAILURES HERE:\n"
         "1. Invented lemma names. If you are not certain a Mathlib lemma exists with that "
         "exact name, search for it or grep the source -- do not guess and hope.\n"
         "2. Wrong types and coercions. Decide up front whether the statement is over "
@@ -1918,6 +1939,92 @@ RESERVE_FRACTIONS = (0.50, 0.70)
 # with room for the verifier's compile and the final grade behind it.
 RESERVE_SOFT_SECONDS = int(os.environ.get("AGENT_RESERVE_SOFT", "2900"))
 RESERVE_HARD_SECONDS = int(os.environ.get("AGENT_RESERVE_HARD", "3700"))
+# Subagents (vibe's `task` tool, e.g. `explore`) share the run's clock. Hooks see their calls
+# but cannot end them, and a subagent whose searches are refused keeps calling while the main
+# agent waits on it. Subagents are therefore bounded together, by EXPLORE_TIME_FRACTION of the
+# run's time limit and EXPLORE_CALL_FRACTION of its turn budget: past either bound, and past
+# the hard fence, every subagent call is refused with an instruction to report, which ends
+# the subagent, and the main agent may not start another.
+TIMEOUT_SECONDS = int(os.environ.get("AGENT_TIMEOUT", "5400"))
+EXPLORE_TIME_FRACTION = float(os.environ.get("AGENT_EXPLORE_TIME_FRACTION", "0.2"))
+EXPLORE_CALL_FRACTION = float(os.environ.get("AGENT_EXPLORE_CALL_FRACTION", "0.3"))
+
+
+# Search fence. Sessions on statements Mathlib covers poorly spend most of their calls
+# searching (two thirds of all calls, and 20 before the first Lean check, on one research
+# problem) for declarations that often do not exist. After SEARCH_STREAK searches with no edit
+# or Lean check in between, one search is refused with an instruction to write the proof
+# outline now, stating each missing fact as a `have ... := by sorry` gap; the gaps left at the
+# end reach the coordinator, which can make them lemmas of their own. Running a shell command
+# (`bash`, also used to compile) neither counts nor resets the streak.
+SEARCH_STREAK = int(os.environ.get("AGENT_SEARCH_STREAK", "12"))
+SEARCH_TOOLS = tuple(name for name in LAND_WITHDRAW if name != "bash") + ("task",)
+PROGRESS_TOOLS = ("edit", "write_file", "search_replace", "m_lean_run_code",
+                  "m_lean_diagnostic_messages", "m_lean_multi_attempt", "m_lean_goal",
+                  "m_lean_term_goal", "m_lean_verify", "m_lean_build")
+
+
+def is_search(name: str, tool_input: dict) -> bool:
+    """A library search: a search tool, or reading a file of a dependency (Mathlib)."""
+    if name == "read_file":
+        path = str(tool_input.get("file_path") or tool_input.get("path") or "")
+        return ".lake/packages" in path or "/Mathlib/" in path
+    return name in SEARCH_TOOLS
+
+
+def search_fence(name: str, tool_input: dict) -> str:
+    """The refusal of a search that extends the streak past SEARCH_STREAK, else ''."""
+    progress = name in PROGRESS_TOOLS
+    if not progress and not is_search(name, tool_input):
+        return ""
+    st = state_read()
+    streak = 0 if progress else int(st.get("search_streak", 0)) + 1
+    fenced = streak > SEARCH_STREAK
+    st["search_streak"] = 0 if fenced else streak
+    if fenced:
+        st["search_fences"] = int(st.get("search_fences", 0)) + 1
+    state_write(st)
+    if not fenced:
+        return ""
+    return (f"Search fence (automatic, not an error): {SEARCH_STREAK} searches in a row "
+            f"without an edit or a Lean check. Write your proof outline into {ANSWER_NAME} "
+            f"now: the steps as `have h : ... := by sorry`, with every fact you have not found "
+            f"in Mathlib as a `have` of its own, and check it with "
+            f"{MCP_ALIAS}_lean_diagnostic_messages. Then close the gaps one at a time, and "
+            f"search only for a specific gap"
+            + (f", describing it in words to {MCP_ALIAS}_lean_leanfinder (meaning-based search "
+               f"over this project's own Mathlib) before any grep" if LEANFINDER_URL else "")
+            + f". A fact searched for several ways without a "
+            f"match is probably absent from this Mathlib: prove it, or leave it as a stated "
+            f"`sorry` gap, which is reported to the coordinator.")
+
+
+# Lake commands that build, fetch or reset packages. Mathlib and its dependencies are shared
+# by every session on the machine; `lake exe cache get` replaces their build files with ones
+# whose traces do not match the local build, after which every session rebuilds Mathlib.
+LAKE_COMMAND = re.compile(r"\blake\s+(?:build|exe|update|clean|upload|pack|unpack)\b")
+
+
+def lake_refusal(name: str, tool_input: dict) -> str:
+    """The refusal of a shell command that runs a forbidden Lake command, else ''."""
+    if name != "bash" or not LAKE_COMMAND.search(str(tool_input.get("command") or "")):
+        return ""
+    return (f"Refused: `lake build`, `lake exe` (including `lake exe cache`), `lake update` and "
+            f"`lake clean` are not available here; Mathlib is prebuilt and shared. Compile with "
+            f"`lean {ANSWER_NAME}` in {PROJECT}, or check with "
+            f"{MCP_ALIAS}_lean_diagnostic_messages.")
+
+
+def explore_spent(st: dict, session_id: str | None) -> tuple[float, int]:
+    """Seconds and tool calls used by all subagents of the run, counting this call when
+    `session_id` names the subagent making it."""
+    spans = st.setdefault("explore", {})
+    if session_id:
+        now = time.time()
+        span = spans.setdefault(session_id, [now, now, 0])
+        span[1], span[2] = now, span[2] + 1
+    return (sum(last - first for first, last, _ in spans.values()),
+            sum(calls for _, _, calls in spans.values()))
 
 
 # ---------------------------------------------------------------------------
@@ -2406,6 +2513,35 @@ def hook_reserve() -> int:
         inv = _hook_stdin()
         calls = tick()                       # EVERY call, including the ones never refused
         name = str(inv.get("tool_name") or "")
+        refused = lake_refusal(name, inv.get("tool_input") or {})
+        if refused:
+            return _hook_reply({"decision": "deny", "reason": refused}, real)
+        subagent = inv.get("parent_session_id")
+        if subagent or name == "task":
+            st = state_read()
+            seconds, explore_calls = explore_spent(
+                st, str(inv.get("session_id")) if subagent else None)
+            state_write(st)
+            t0 = float(st.get("t0") or 0.0)
+            turns = int(st.get("max_turns") or MODEL["max_turns"])
+            spent = (seconds > EXPLORE_TIME_FRACTION * TIMEOUT_SECONDS
+                     or explore_calls > EXPLORE_CALL_FRACTION * turns
+                     or (t0 and time.time() - t0 > RESERVE_HARD_SECONDS))
+            if spent and subagent:
+                return _hook_reply({"decision": "deny", "reason": (
+                    f"The subagent budget of this run is spent ({int(seconds)}s and "
+                    f"{explore_calls} tool calls). Make no further tool calls: answer now with "
+                    f"what you found -- the declarations and file paths that look usable, the "
+                    f"approach they suggest, and the searches that found nothing. The main "
+                    f"agent continues from your answer.")}, real)
+            if spent:
+                return _hook_reply({"decision": "deny", "reason": (
+                    "The subagent budget of this run is spent. Search directly with the "
+                    "Lean search tools, or work from what you have.")}, real)
+        if not subagent:
+            fenced = search_fence(name, inv.get("tool_input") or {})
+            if fenced:
+                return _hook_reply({"decision": "deny", "reason": fenced}, real)
         if name not in LAND_WITHDRAW:
             return _hook_reply({"decision": "allow"}, real)
         st = state_read()

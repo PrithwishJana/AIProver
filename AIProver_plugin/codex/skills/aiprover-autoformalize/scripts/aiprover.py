@@ -1444,6 +1444,16 @@ def _write_json(p: Path, d: dict) -> None:
     tmp.replace(p)
 
 
+def _worker_pids(jobdir: Path) -> list[int]:
+    """The job's worker processes: the first, and one per `aiprover grow`."""
+    w = _read_json(jobdir / "worker.json")
+    return [pid for pid in (w.get("pids") or [w.get("pid")]) if pid]
+
+
+def _workers_alive(jobdir: Path) -> bool:
+    return any(_pid_alive(pid) for pid in _worker_pids(jobdir))
+
+
 def _pid_alive(pid: int | None) -> bool:
     if not pid:
         return False
@@ -1520,6 +1530,27 @@ def _acquire_slot(cfg: Config, stop: threading.Event):
     return None
 
 
+def free_slots(cfg: Config) -> int:
+    """Slots of the machine-wide semaphore no session holds."""
+    sd = cfg.work_root / ".slots"
+    sd.mkdir(exist_ok=True)
+    free = 0
+    for i in range(cfg.max_parallel):
+        with open(sd / f"slot{i}.lock", "w") as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(f, fcntl.LOCK_UN)
+                free += 1
+            except OSError:
+                pass
+    return free
+
+
+def cmd_slots(cfg: Config, a: argparse.Namespace) -> int:
+    print(json.dumps({"total": cfg.max_parallel, "free": free_slots(cfg)}))
+    return 0
+
+
 def harness_env(cfg: Config, ws: Path, api: str, model: str) -> dict:
     """The environment the evolution run gave the harness (tools/apptainer-local), on this host."""
     env = dict(os.environ)
@@ -1547,6 +1578,9 @@ def harness_env(cfg: Config, ws: Path, api: str, model: str) -> dict:
         "AGENT_ELAN_HOST": str(elan),
         "AGENT_VIBE_HOST": str(cfg.p("vibe_venv")),
         "AGENT_MCP_HOST": str(cfg.p("mcp_venv")),
+        # A semantic index of THIS Mathlib served with the Lean Finder protocol
+        # (aiprover_orchestration/search/server.py); empty = the hosted v4.28 index.
+        "AGENT_LEANFINDER_URL": str(cfg.rt.get("leanfinder_url", "")),
     })
     return env
 
@@ -1565,6 +1599,7 @@ def budget_env(req: dict) -> dict[str, str]:
     hard = int(kill * CHAMPION_HARD / CHAMPION_KILL)
     soft = int(kill * CHAMPION_SOFT / CHAMPION_KILL)
     return {"AGENT_MAX_TURNS": str(int(req.get("max_turns") or 100)),
+            "AGENT_TIMEOUT": str(kill),
             "AGENT_RESERVE_HARD": str(hard), "AGENT_RESERVE_SOFT": str(soft),
             "AGENT_FINALIZE_DEADLINE": str(hard)}
 
@@ -1650,6 +1685,7 @@ def run_sample(cfg: Config, jobdir: Path, i: int, req: dict, stop: threading.Eve
     """One rollout. With `resume`, the sample's saved session continues (its conversation,
     Work.lean and clock) instead of starting over; so does a retry after an infra failure."""
     ws = jobdir / f"s{i}"
+    req = {**req, **_read_json(ws / "budget.json")}
     st_path = ws / "state.json"
     _write_json(st_path, {"state": "queued"})
     slot = _acquire_slot(cfg, stop)
@@ -1773,24 +1809,30 @@ def run_sample(cfg: Config, jobdir: Path, i: int, req: dict, stop: threading.Eve
         slot.close()
 
 
-def cmd_worker(cfg: Config, jobdir: Path, resume: bool = False) -> int:
+def cmd_worker(cfg: Config, jobdir: Path, resume: bool = False,
+               only: list[int] | None = None) -> int:
     """Run the job's samples; with `resume`, only those `aiprover resume` re-queued, each
-    continuing its saved session."""
+    continuing its saved session; with `only`, the samples `aiprover grow` added. The job's
+    result is written by the worker whose samples finish last."""
     req = _read_json(jobdir / "request.json")
     stop = threading.Event()
 
     def _term(*_):
         stop.set()
     signal.signal(signal.SIGTERM, _term)
-    samples = [i for i in range(req["samples"])
-               if not resume or _read_json(jobdir / f"s{i}" / "state.json").get("state") == "queued"]
+    samples = only if only is not None else [
+        i for i in range(req["samples"])
+        if not resume or _read_json(jobdir / f"s{i}" / "state.json").get("state") == "queued"]
     threads = [threading.Thread(target=run_sample, args=(cfg, jobdir, i, req, stop, resume))
                for i in samples]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
-    _finish(jobdir)
+    total = _read_json(jobdir / "request.json").get("samples", 0)
+    if all(_read_json(jobdir / f"s{i}" / "state.json").get("state") == "done"
+           for i in range(total)):
+        _finish(jobdir)
     return 0
 
 
@@ -1820,8 +1862,7 @@ def job_state(jobdir: Path) -> dict:
     req = _read_json(jobdir / "request.json")
     states = [_read_json(jobdir / f"s{i}" / "state.json") for i in range(req.get("samples", 0))]
     done = (jobdir / "result.json").is_file()
-    w = _read_json(jobdir / "worker.json")
-    if not done and not _pid_alive(w.get("pid")):
+    if not done and not _workers_alive(jobdir):
         # The worker died (reboot, OOM kill): settle what exists rather than hang forever.
         _finish(jobdir)
         done = True
@@ -1871,7 +1912,46 @@ def cmd_status(cfg: Config, a: argparse.Namespace) -> int:
     dirs = [_job_dir(cfg, a.job)] if a.job else sorted(cfg.jobs.iterdir())[-15:]
     for d in dirs:
         if d.is_dir() and (d / "request.json").is_file():
-            print(_fmt_state(job_state(d)))
+            state = job_state(d)
+            print(json.dumps(state) if a.json else _fmt_state(state))
+    return 0
+
+
+# A grown session needs this much of the job's time left to be worth starting.
+GROW_MIN_SECONDS = 900
+
+
+def cmd_grow(cfg: Config, a: argparse.Namespace) -> int:
+    """Add sessions to a running job. Each new session gets the time left until the job's
+    deadline (its creation plus its timeout), so the job ends when it would have; the new
+    sessions run under a worker of their own. Prints the number of sessions added."""
+    d = _job_dir(cfg, a.job)
+    req = _read_json(d / "request.json")
+    left = req.get("created", 0) + req.get("timeout_sec", 0) - time.time()
+    if (d / "result.json").is_file() or not _workers_alive(d) or left < GROW_MIN_SECONDS:
+        print(0)
+        return 4
+    first = req["samples"]
+    added = list(range(first, first + max(1, int(a.samples))))
+    problem = (d / "problem.txt").read_text()
+    for i in added:
+        s = d / f"s{i}"
+        s.mkdir()
+        (s / "problem.txt").write_text(problem)
+        _write_json(s / "budget.json", {"timeout_sec": int(left)})
+        _write_json(s / "state.json", {"state": "queued"})
+    req["samples"] = added[-1] + 1
+    _write_json(d / "request.json", req)
+    log = open(d / "worker.log", "ab")
+    p = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_worker", str(d),
+                          "--only", ",".join(map(str, added))],
+                         stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                         start_new_session=True, close_fds=True,
+                         env={**os.environ, "AIPROVER_CONFIG": str(cfg.path)})
+    w = _read_json(d / "worker.json")
+    w["pids"] = _worker_pids(d) + [p.pid]
+    _write_json(d / "worker.json", w)
+    print(len(added))
     return 0
 
 
@@ -1924,10 +2004,13 @@ def cmd_result(cfg: Config, a: argparse.Namespace) -> int:
 def cmd_resume(cfg: Config, a: argparse.Namespace) -> int:
     """Continue a job whose sessions were cut off (statuses in RESUMABLE, an infra failure in
     their summary, or left running by a worker that died): those samples resume their saved
-    sessions; finished samples keep their results. `--timeout` and `--max-turns` replace the job's budgets."""
+    sessions; finished samples keep their results. `--timeout` and `--max-turns` replace the job's budgets.
+    A job whose workers are alive is left as it is, so the caller can `wait` on it."""
     d = _job_dir(cfg, a.job)
-    if _pid_alive(_read_json(d / "worker.json").get("pid")):
-        raise AIProverError(f"job {d.name} is still running")
+    if _workers_alive(d):
+        print(d.name)
+        print("  still running; nothing to resume", file=sys.stderr)
+        return 0
     req = _read_json(d / "request.json")
     if a.timeout:
         req["timeout_sec"] = int(a.timeout)
@@ -1963,9 +2046,9 @@ def cmd_resume(cfg: Config, a: argparse.Namespace) -> int:
 
 def cmd_cancel(cfg: Config, a: argparse.Namespace) -> int:
     d = _job_dir(cfg, a.job)
-    w = _read_json(d / "worker.json")
-    if _pid_alive(w.get("pid")):
-        os.kill(w["pid"], signal.SIGTERM)
+    for pid in _worker_pids(d):
+        if _pid_alive(pid):
+            os.kill(pid, signal.SIGTERM)
     req = _read_json(d / "request.json")
     for i in range(req.get("samples", 0)):
         st = _read_json(d / f"s{i}" / "state.json")
@@ -2383,6 +2466,11 @@ def main(argv: list[str] | None = None) -> int:
 
     st = sub.add_parser("status")
     st.add_argument("job", nargs="?")
+    st.add_argument("--json", action="store_true")
+    sub.add_parser("slots", help="machine-wide session slots: total and free (JSON)")
+    gr = sub.add_parser("grow", help="add sessions to a running job, within its deadline")
+    gr.add_argument("job")
+    gr.add_argument("--samples", "-k", type=int, default=1)
     li = sub.add_parser("list")
     li.add_argument("-n", type=int, default=20)
     ca = sub.add_parser("cancel")
@@ -2464,6 +2552,7 @@ def main(argv: list[str] | None = None) -> int:
     wk = sub.add_parser("_worker")
     wk.add_argument("jobdir")
     wk.add_argument("--resume", action="store_true")
+    wk.add_argument("--only", help="comma-separated samples (added by `grow`)")
     sub.add_parser("_mcp_smoke")
 
     a = ap.parse_args(argv)
@@ -2506,7 +2595,11 @@ def main(argv: list[str] | None = None) -> int:
             "workspace": lambda: cmd_workspace(cfg, a),
             "doctor": lambda: cmd_doctor(cfg, a),
             "mcp-serve": lambda: cmd_mcp_serve(cfg, a),
-            "_worker": lambda: cmd_worker(cfg, Path(a.jobdir), a.resume),
+            "_worker": lambda: cmd_worker(
+                cfg, Path(a.jobdir), a.resume,
+                [int(i) for i in a.only.split(",")] if a.only else None),
+            "grow": lambda: cmd_grow(cfg, a),
+            "slots": lambda: cmd_slots(cfg, a),
             "_mcp_smoke": lambda: cmd_mcp_smoke(cfg),
         }[a.cmd]()
     except AIProverError as e:
