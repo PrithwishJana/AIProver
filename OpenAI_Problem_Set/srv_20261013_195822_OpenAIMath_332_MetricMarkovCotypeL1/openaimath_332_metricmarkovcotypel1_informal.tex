@@ -1,0 +1,857 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[varqu,scaled=0.95]{zi4}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{fvextra}
+\usepackage{booktabs,enumitem,microtype,needspace}
+\usepackage[colorlinks,linkcolor=MidnightBlue,citecolor=MidnightBlue,urlcolor=MidnightBlue]{hyperref}
+\usepackage[capitalise,nameinlink]{cleveref}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+\newcommand{\leanname}[1]{\texttt{\detokenize{#1}}}
+\newenvironment{leanblock}[1]
+  {\par\smallskip\Needspace{4\baselineskip}\noindent{\footnotesize\textsf{#1}}\par\nopagebreak\vspace{2pt}}
+  {\par\medskip}
+\fvset{breaklines=true,breakanywhere=true,fontsize=\footnotesize,frame=leftline,
+  framerule=0.8pt,rulecolor=\color{gray!60},xleftmargin=4pt,framesep=6pt}
+\usepackage{longtable}
+\newcommand{\unverified}{\quad\textup{\small[not machine-verified]}}
+
+\newcommand{\one}{\mathbf{1}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Nz}{\mathbb{N}_0}
+\newcommand{\Pn}{\mathcal{P}_n}
+
+\title{Metric Markov cotype two of $\ell_1$ with constant $3024$: a resolvent proof}
+\date{}
+\begin{document}
+\maketitle
+\begin{abstract}
+We prove that $\ell_1$ has metric Markov cotype two with constant $C^2=3024$. For every stochastic matrix $A$ that is reversible with respect to a probability vector $\pi$, every time horizon $t$ and all points $x_1,\dots,x_n\in\ell_1$, there are points $y_i$ such that $\sum_i\pi_i\|x_i-y_i\|_1^2+t\sum_{i,j}\pi_ia_{ij}\|y_i-y_j\|_1^2$ is at most $3024$ times the Ces\`aro-averaged energy of the $x_i$. The proof follows the resolvent approach of Mendel--Naor. It has three parts: a cut decomposition of finitely many $\ell_1$ vectors, a "flat" cubic map whose squared increments are controlled by a quartic Hilbert potential, and a comparison of the geometric (resolvent) average with the Ces\`aro average, which costs a factor $28$. Instead of a stopped martingale, the formal proof uses deterministic identities for the resolvent matrix $G=\sum_s(1-q)q^sA^s$. Every lemma and the main theorem are machine-verified.
+\end{abstract}
+
+\begin{center}\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+Source & openai/math@fd4aeeb, family 332, OpenAIMath\_332\_MetricMarkovCotypeL1 \\
+Status & proof machine-verified (Lean 4, Mathlib) \\
+Lemmas & 39 \\
+Text & written by claude-opus-5-5, checked against the Lean source \\
+Run & \texttt{srv\_20261013\_195822\_OpenAIMath\_332\_MetricMarkovCotypeL1} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tableofcontents
+
+\section{Setting}
+
+Throughout, $\Nz=\{0,1,2,\dots\}$, $[n]=\{1,\dots,n\}$, and $\Pn$ is the set of all subsets of $[n]$, including $\emptyset$ and $[n]$. For $B\in\Pn$ and $i\in[n]$ we write $\one_B(i)\in\{0,1\}$ for the indicator of $i\in B$. For an $n\times n$ real matrix $A$ we set $A^0=I$ and write $\delta_{ij}=I_{ij}$.
+
+\paragraph{The space $\ell_1$.} We write $\ell_1$ for the real Banach space of real sequences $x=(x(k))_{k\in\Nz}$ with $\|x\|_1=\sum_{k\ge0}|x(k)|<\infty$. Indexing by $\Nz$ rather than by $\{1,2,\dots\}$ is immaterial. All norms of elements of $\ell_1$ below are this norm.
+
+\paragraph{Probability vectors and matrices.} Let $n\in\Nz$.
+\begin{itemize}
+\item A vector $\pi\in\R^n$ is a \emph{probability vector} if $\pi_i\ge0$ for all $i$ and $\sum_i\pi_i=1$.
+\item A matrix $A\in\R^{n\times n}$ is \emph{stochastic} if $a_{ij}\ge0$ for all $i,j$ and $\sum_ja_{ij}=1$ for all $i$.
+\item $A$ is \emph{reversible with respect to} a vector $\pi\in\R^n$ if $\pi_ia_{ij}=\pi_ja_{ji}$ for all $i,j$.
+\end{itemize}
+These conditions are consistent: for $n=1$, $\pi=(1)$ and $A=(1)$ satisfy all three.
+
+\paragraph{Stationarity.} Let $A$ be stochastic and reversible with respect to an arbitrary vector $\pi\in\R^n$. Then for every $s\in\Nz$ and every $j$,
+\begin{equation}\label{eq:stat}
+\sum_{i}\pi_i(A^s)_{ij}=\pi_j .
+\end{equation}
+Indeed, for $s=0$ this is trivial. If it holds for $s$, then
+\[
+\sum_i\pi_i(A^{s+1})_{ij}=\sum_l\Bigl(\sum_i\pi_i(A^s)_{il}\Bigr)a_{lj}=\sum_l\pi_la_{lj}=\sum_l\pi_ja_{jl}=\pi_j .
+\]
+Reversibility enters the whole proof only through \eqref{eq:stat}.
+
+\begin{theorem}\label{thm:main}
+Let $n,t\ge1$ be integers. Let $\pi$ be a probability vector on $[n]$ and let $A=(a_{ij})$ be a stochastic $n\times n$ matrix that is reversible with respect to $\pi$. Then for all $x_1,\dots,x_n\in\ell_1$ there exist $y_1,\dots,y_n\in\ell_1$ such that
+\[
+\sum_i\pi_i\|x_i-y_i\|_1^2+t\sum_{i,j}\pi_ia_{ij}\|y_i-y_j\|_1^2
+\le 3024\sum_{i,j}\pi_i\Bigl(\frac1t\sum_{s=1}^tA^s\Bigr)_{ij}\|x_i-x_j\|_1^2 .
+\]
+\end{theorem}
+
+This is exactly the source statement, with $\ell_1$ indexed by $\Nz$.
+
+\section{Lemmas}
+
+\subsection{Markov chain preliminaries}
+
+\begin{lemma}[Powers of stochastic matrices]\label{lem:stoch_pow}
+If $A$ is a stochastic $n\times n$ matrix, then $A^s$ is stochastic for every $s\in\Nz$.
+\end{lemma}
+\begin{proof}
+We argue by induction on $s$. The matrix $A^0=I$ is stochastic. Suppose $A^s$ is stochastic. Then $(A^{s+1})_{ij}=\sum_k(A^s)_{ik}a_{kj}\ge0$. Moreover,
+\[
+\sum_j(A^{s+1})_{ij}=\sum_k(A^s)_{ik}\sum_ja_{kj}=\sum_k(A^s)_{ik}=1. \qedhere
+\]
+\end{proof}
+
+\begin{lemma}[Weighted Minkowski inequality]\label{lem:weighted_minkowski}
+Let $\iota$ be a finite set and let $c,f,g,F:\iota\to\R$ be nonnegative with $F\le f+g$ pointwise. Then
+\[
+\Bigl(\sum_ic_iF_i^2\Bigr)^{1/2}\le\Bigl(\sum_ic_if_i^2\Bigr)^{1/2}+\Bigl(\sum_ic_ig_i^2\Bigr)^{1/2}.
+\]
+\end{lemma}
+\begin{proof}
+Apply Cauchy--Schwarz to the vectors $(\sqrt{c_i}f_i)$ and $(\sqrt{c_i}g_i)$. This gives
+\[
+\sum_ic_if_ig_i\le\Bigl(\sum c_if_i^2\Bigr)^{1/2}\Bigl(\sum c_ig_i^2\Bigr)^{1/2}.
+\]
+Since $0\le F_i\le f_i+g_i$, we have $F_i^2\le(f_i+g_i)^2$. Therefore
+\[
+\sum c_iF_i^2\le\sum c_if_i^2+\sum c_ig_i^2+2\sum c_if_ig_i\le\Bigl(\bigl(\textstyle\sum c_if_i^2\bigr)^{1/2}+\bigl(\textstyle\sum c_ig_i^2\bigr)^{1/2}\Bigr)^2 .
+\]
+Taking square roots of these nonnegative quantities gives the claim.
+\end{proof}
+
+\begin{lemma}[Two-step expansion]\label{lem:markov_subadd_expand}
+Let $\pi\in\R^n$ and $A\in\R^{n\times n}$ be arbitrary, let $f:[n]\times[n]\to\R$, and let $r,s\in\Nz$. Then
+\[
+\sum_{i,j}\pi_i(A^{r+s})_{ij}f(i,j)=\sum_{(i,k,j)\in[n]^3}\pi_i(A^r)_{ik}(A^s)_{kj}\,f(i,j).
+\]
+\end{lemma}
+\begin{proof}
+Since $A^{r+s}=A^rA^s$, we have $(A^{r+s})_{ij}=\sum_k(A^r)_{ik}(A^s)_{kj}$. Substitute this, distribute, and rewrite the iterated finite sum as a sum over triples.
+\end{proof}
+
+\begin{lemma}[Marginalizing the last step]\label{lem:markov_subadd_left}
+Let $A$ be stochastic, let $\pi\in\R^n$ and $f:[n]\times[n]\to\R$ be arbitrary, and let $r,s\in\Nz$. Then
+\[
+\sum_{(i,k,j)}\pi_i(A^r)_{ik}(A^s)_{kj}f(i,k)=\sum_{i,k}\pi_i(A^r)_{ik}f(i,k).
+\]
+\end{lemma}
+\begin{proof}
+Sum over $j$ first. By \cref{lem:stoch_pow}, $\sum_j(A^s)_{kj}=1$.
+\end{proof}
+
+\begin{lemma}[Marginalizing the first step]\label{lem:markov_subadd_right}
+Let $A$ be stochastic and reversible with respect to an arbitrary $\pi\in\R^n$. Let $f:[n]\times[n]\to\R$ and $r,s\in\Nz$. Then
+\[
+\sum_{(i,k,j)}\pi_i(A^r)_{ik}(A^s)_{kj}f(k,j)=\sum_{k,j}\pi_k(A^s)_{kj}f(k,j).
+\]
+\end{lemma}
+\begin{proof}
+Reorder the sum with $k$ outermost. The left side becomes
+\[
+\sum_k\Bigl(\sum_i\pi_i(A^r)_{ik}\Bigr)\sum_j(A^s)_{kj}f(k,j).
+\]
+By \eqref{eq:stat}, the inner sum over $i$ equals $\pi_k$.
+\end{proof}
+
+\begin{lemma}[A geometric second moment]\label{lem:comp_geom_sq_sqsum}
+If $0\le q<1$, then the series $\sum_{s\ge0}s^2q^s$ converges and its sum is $q(1+q)/(1-q)^3$.
+\end{lemma}
+\begin{proof}
+The series converges, being a polynomial times a geometric sequence. Let $T$ be its sum. Recall that $\sum_s q^s=(1-q)^{-1}$ and $\sum_s sq^s=q(1-q)^{-2}$. The term with $s=0$ vanishes, so
+\[
+T=\sum_{s\ge0}(s+1)^2q^{s+1}=q\sum_{s\ge0}(s^2+2s+1)q^s=q\Bigl(T+\frac{2q}{(1-q)^2}+\frac1{1-q}\Bigr).
+\]
+Hence
+\[
+(1-q)T=q\,\frac{2q+(1-q)}{(1-q)^2}=\frac{q(1+q)}{(1-q)^2}. \qedhere
+\]
+\end{proof}
+
+\begin{lemma}[Square-root subadditivity of the $s$-step energy]\label{lem:markov_subadd}
+Assume the following.
+\begin{itemize}
+\item $\pi\in\R^n$ has nonnegative entries.
+\item $A$ is stochastic and reversible with respect to $\pi$.
+\item $d:[n]\times[n]\to\R$ is nonnegative and satisfies $d(i,k)\le d(i,j)+d(j,k)$ for all $i,j,k$.
+\end{itemize}
+Define $D(s)=\sum_{i,j}\pi_i(A^s)_{ij}\,d(i,j)^2$ for $s\in\Nz$. Then for all $r,s\in\Nz$,
+\[
+\sqrt{D(r+s)}\le\sqrt{D(r)}+\sqrt{D(s)}.
+\]
+\end{lemma}
+\begin{proof}
+Index by triples $p=(i,k,j)$ and use the weights $c_p=\pi_i(A^r)_{ik}(A^s)_{kj}$, which are nonnegative by \cref{lem:stoch_pow}. The three energies are sums against the same weights:
+\begin{itemize}
+\item $D(r+s)=\sum_pc_p\,d(i,j)^2$ by \cref{lem:markov_subadd_expand};
+\item $D(r)=\sum_pc_p\,d(i,k)^2$ by \cref{lem:markov_subadd_left};
+\item $D(s)=\sum_pc_p\,d(k,j)^2$ by \cref{lem:markov_subadd_right}.
+\end{itemize}
+Apply \cref{lem:weighted_minkowski} with $F_p=d(i,j)$, $f_p=d(i,k)$ and $g_p=d(k,j)$. The hypothesis $F\le f+g$ is the triangle inequality.
+\end{proof}
+
+\subsection{Comparison of geometric and Ces\`aro averages}
+
+\begin{lemma}[A power estimate]\label{lem:comp_geom_mod_pow_le}
+For every integer $t\ge1$, $\bigl(t/(t+1)\bigr)^t\le 1/2$.
+\end{lemma}
+\begin{proof}
+Bernoulli's inequality gives $(1+1/t)^t\ge1+t\cdot\frac1t=2$. Since $t/(t+1)=(1+1/t)^{-1}$, it follows that $\bigl(t/(t+1)\bigr)^t\le 1/2$.
+\end{proof}
+
+\begin{lemma}[Geometric sums of periodic sequences]\label{lem:comp_geom_mod_hasSum}
+Let $t\ge1$ be an integer, let $0\le q<1$, and let $f:\Nz\to\R$ be arbitrary. Then $\sum_{s\ge0}q^sf(s\bmod t)$ converges absolutely, and
+\[
+\sum_{s\ge0}q^sf(s\bmod t)=\frac{\sum_{r=0}^{t-1}q^rf(r)}{1-q^t}.
+\]
+\end{lemma}
+\begin{proof}
+Let $g(s)=q^sf(s\bmod t)$. Then $|g(s)|\le\bigl(\sum_{r<t}|f(r)|\bigr)q^s$, so the series converges absolutely; let $S$ be its sum.
+
+Split off the first $t$ terms. For $s<t$ we have $g(s)=q^sf(s)$. Since $(s+t)\bmod t=s\bmod t$, we have $g(s+t)=q^tg(s)$. Therefore
+\[
+S=\sum_{r<t}q^rf(r)+q^tS .
+\]
+As $q^t<1$, we may solve for $S$.
+\end{proof}
+
+\begin{lemma}[Block decomposition]\label{lem:comp_block}
+Let $t\in\Nz$. Let $D:\Nz\to\R$ be nonnegative with $\sqrt{D(r+s)}\le\sqrt{D(r)}+\sqrt{D(s)}$ for all $r,s$. Then for all $j,r\in\Nz$,
+\[
+D(jt+r)\le 2j^2D(t)+2D(r).
+\]
+\end{lemma}
+\begin{proof}
+By induction on $j$, $\sqrt{D(jt+r)}\le j\sqrt{D(t)}+\sqrt{D(r)}$. The inductive step is
+\[
+\sqrt{D((jt+r)+t)}\le\sqrt{D(jt+r)}+\sqrt{D(t)}.
+\]
+Both sides of the bound are nonnegative, so we may square it. Then use $(a+b)^2\le2a^2+2b^2$.
+\end{proof}
+
+\begin{lemma}[The $t$-step energy against its average]\label{lem:comp_Dt}
+Let $t\ge1$. Let $D:\Nz\to\R$ be nonnegative with $D(0)=0$ and $\sqrt{D(r+s)}\le\sqrt{D(r)}+\sqrt{D(s)}$ for all $r,s$. Then
+\[
+D(t)\le 4\cdot\frac1t\sum_{s=1}^tD(s).
+\]
+\end{lemma}
+\begin{proof}
+Squaring the hypothesis and using $2\sqrt{D(a)D(b)}\le D(a)+D(b)$ gives $D(a+b)\le2D(a)+2D(b)$. For $0\le r\le t-1$, apply this with $a=r+1$ and $b=t-1-r$:
+\[
+D(t)\le2D(r+1)+2D(t-1-r).
+\]
+Summing over $r$ and reflecting the index in the second sum gives
+\[
+tD(t)\le2\sum_{r=0}^{t-1}D(r+1)+2\sum_{r=0}^{t-1}D(r).
+\]
+The first sum is $\sum_{s=1}^tD(s)$. Because $D(0)=0$ and $D(t)\ge0$, the second sum is
+\[
+\sum_{r=0}^{t-1}D(r)=\sum_{s=1}^{t-1}D(s)\le\sum_{s=1}^tD(s).
+\]
+Hence $tD(t)\le4\sum_{s=1}^tD(s)$; divide by $t$.
+\end{proof}
+
+\begin{lemma}[Second moment of the block index]\label{lem:comp_geom_sq}
+Let $t\ge1$ and $q=t/(t+1)$. Then $\sum_{s\ge0}q^s\lfloor s/t\rfloor^2$ converges, and
+\[
+(1-q)\sum_{s\ge0}q^s\lfloor s/t\rfloor^2\le3 .
+\]
+\end{lemma}
+\begin{proof}
+Since $0\le\lfloor s/t\rfloor\le s/t$, we have $q^s\lfloor s/t\rfloor^2\le t^{-2}s^2q^s$. The comparison series converges by \cref{lem:comp_geom_sq_sqsum}, so the left series converges. Again by \cref{lem:comp_geom_sq_sqsum},
+\[
+(1-q)\sum_sq^s\lfloor s/t\rfloor^2\le\frac{1-q}{t^2}\cdot\frac{q(1+q)}{(1-q)^3} .
+\]
+With $1-q=1/(t+1)$, $q=t/(t+1)$ and $1+q=(2t+1)/(t+1)$, the right side equals
+\[
+\frac{1}{t^2}\cdot\frac{t(2t+1)}{(t+1)^2}\,(t+1)^2=\frac{2t+1}{t}\le3. \qedhere
+\]
+\end{proof}
+
+\begin{lemma}[Distribution of the remainder]\label{lem:comp_geom_mod}
+Let $t\ge1$, $q=t/(t+1)$ and $f:\Nz\to\R$ nonnegative. Then $\sum_{s\ge0}q^sf(s\bmod t)$ converges, and
+\[
+(1-q)\sum_{s\ge0}q^sf(s\bmod t)\le\frac2t\sum_{r=0}^{t-1}f(r).
+\]
+\end{lemma}
+\begin{proof}
+Put $P=\sum_{r<t}q^rf(r)$ and $F=\sum_{r<t}f(r)$, so that $0\le P\le F$. By \cref{lem:comp_geom_mod_hasSum}, the series converges with sum $P/(1-q^t)$. By \cref{lem:comp_geom_mod_pow_le}, $1-q^t\ge1/2$, so $P/(1-q^t)\le2P\le2F$. Finally $(1-q)t=q\le1$, which gives
+\[
+(1-q)\cdot2F\le\frac{2F}{t}. \qedhere
+\]
+\end{proof}
+
+\begin{lemma}[Geometric versus Ces\`aro average]\label{lem:comp_real}
+Let $t\ge1$ and $q=t/(t+1)$. Let $D:\Nz\to\R$ be nonnegative with $D(0)=0$ and $\sqrt{D(r+s)}\le\sqrt{D(r)}+\sqrt{D(s)}$ for all $r,s$. Then $\sum_{s\ge0}q^sD(s)$ converges, and
+\[
+(1-q)\sum_{s\ge0}q^sD(s)\le28\cdot\frac1t\sum_{s=1}^tD(s).
+\]
+\end{lemma}
+\begin{proof}
+Let $W=\frac1t\sum_{s=1}^tD(s)$.
+
+\emph{Termwise bound.} Write $s=\lfloor s/t\rfloor t+(s\bmod t)$. By \cref{lem:comp_block},
+\[
+q^sD(s)\le2D(t)\,q^s\lfloor s/t\rfloor^2+2\,q^sD(s\bmod t).
+\]
+The right side has a convergent sum by \cref{lem:comp_geom_sq,lem:comp_geom_mod}. The terms $q^sD(s)$ are nonnegative, so $\sum_s q^sD(s)$ converges.
+
+\emph{Summing.} Summing the termwise bound and multiplying by $1-q\ge0$ gives
+\[
+(1-q)\sum_sq^sD(s)\le2D(t)\cdot(1-q)\sum_sq^s\lfloor s/t\rfloor^2+2(1-q)\sum_sq^sD(s\bmod t).
+\]
+We bound the three ingredients:
+\begin{itemize}
+\item $D(t)\le4W$ by \cref{lem:comp_Dt};
+\item the first series term is at most $3$ by \cref{lem:comp_geom_sq};
+\item the second series term is at most $\frac2t\sum_{r<t}D(r)$ by \cref{lem:comp_geom_mod}, and $\frac2t\sum_{r<t}D(r)\le2W$ because $\sum_{r<t}D(r)\le\sum_{s=1}^tD(s)$ (as $D(0)=0$ and $D(t)\ge0$).
+\end{itemize}
+Altogether the total is at most $2\cdot4W\cdot3+2\cdot2W=28W$.
+\end{proof}
+
+\subsection{The resolvent}
+
+In the next lemmas, for a stochastic $A$ and $0\le q<1$, $G$ denotes the matrix
+\[
+G_{ij}=\sum_{s\ge0}(1-q)q^s(A^s)_{ij}.
+\]
+The series converges by \cref{lem:res_summable}.
+
+\begin{lemma}[Convergence]\label{lem:res_summable}
+If $A$ is stochastic and $0\le q<1$, then for all $i,j$ the series $\sum_{s\ge0}(1-q)q^s(A^s)_{ij}$ converges.
+\end{lemma}
+\begin{proof}
+By \cref{lem:stoch_pow}, every entry of $A^s$ lies in $[0,1]$: it is nonnegative and at most its row sum $1$. So the terms lie between $0$ and $(1-q)q^s$, which is summable.
+\end{proof}
+
+\begin{lemma}[Resolvent comparison]\label{lem:res_comparison}
+Let $t\ge1$. Let $\pi$ be a probability vector on $[n]$ and let $A$ be stochastic and reversible with respect to $\pi$. Let $x_1,\dots,x_n\in\ell_1$, let $q=t/(t+1)$, and let $G$ be as above. Then
+\[
+\sum_{i,j}\pi_iG_{ij}\|x_i-x_j\|_1^2\le28\sum_{i,j}\pi_i\Bigl(\frac1t\sum_{s=1}^t(A^s)_{ij}\Bigr)\|x_i-x_j\|_1^2 .
+\]
+\end{lemma}
+\begin{proof}
+Let $D(s)=\sum_{i,j}\pi_i(A^s)_{ij}\|x_i-x_j\|_1^2$. We check the hypotheses of \cref{lem:comp_real}:
+\begin{itemize}
+\item $D(0)=\sum_i\pi_i\|x_i-x_i\|_1^2=0$;
+\item $D\ge0$ because $\pi_i\ge0$ and $(A^s)_{ij}\ge0$ (\cref{lem:stoch_pow});
+\item $D$ is square-root subadditive by \cref{lem:markov_subadd} with $d(i,j)=\|x_i-x_j\|_1$, which is nonnegative and satisfies the triangle inequality.
+\end{itemize}
+
+\emph{Left side.} For fixed $i,j$, the series $\sum_s\pi_i(1-q)q^s(A^s)_{ij}\|x_i-x_j\|_1^2$ converges to $\pi_iG_{ij}\|x_i-x_j\|_1^2$. Summing these finitely many convergent series shows that $\sum_s(1-q)q^sD(s)$ converges to the left side. Hence the left side equals $(1-q)\sum_sq^sD(s)$.
+
+\emph{Right side.} Exchanging finite sums shows that the right side without the factor $28$ equals $\frac1t\sum_{s=1}^tD(s)$.
+
+The claim now follows from \cref{lem:comp_real}.
+\end{proof}
+
+\begin{lemma}[Nonnegativity]\label{lem:res_nonneg}
+If $A$ is stochastic and $0\le q<1$, then $G_{ij}\ge0$ for all $i,j$.
+\end{lemma}
+\begin{proof}
+Each term $(1-q)q^s(A^s)_{ij}$ is nonnegative by \cref{lem:stoch_pow}.
+\end{proof}
+
+\begin{lemma}[Row sums]\label{lem:res_rowsum}
+If $A$ is stochastic and $0\le q<1$, then $\sum_jG_{ij}=1$ for every $i$.
+\end{lemma}
+\begin{proof}
+Exchange the finite sum over $j$ with the convergent series. Using \cref{lem:stoch_pow},
+\[
+\sum_jG_{ij}=\sum_s(1-q)q^s\sum_j(A^s)_{ij}=\sum_s(1-q)q^s=1. \qedhere
+\]
+\end{proof}
+
+\begin{lemma}[Stationarity of the resolvent]\label{lem:res_stationary}
+Let $\pi\in\R^n$ be arbitrary, let $A$ be stochastic and reversible with respect to $\pi$, and let $0\le q<1$. Then $\sum_i\pi_iG_{ij}=\pi_j$ for every $j$.
+\end{lemma}
+\begin{proof}
+Exchange the finite sum with the series and use \eqref{eq:stat}:
+\[
+\sum_i\pi_iG_{ij}=\sum_s(1-q)q^s\sum_i\pi_i(A^s)_{ij}=\sum_s(1-q)q^s\pi_j=\pi_j. \qedhere
+\]
+\end{proof}
+
+\begin{lemma}[First-step identity]\label{lem:res_left}
+If $A$ is stochastic and $0\le q<1$, then for all $i,j$,
+\[
+G_{ij}=(1-q)\delta_{ij}+q\sum_la_{il}G_{lj}.
+\]
+\end{lemma}
+\begin{proof}
+Split off the term $s=0$, which is $(1-q)\delta_{ij}$. In the remaining terms use $(A^{s+1})_{ij}=\sum_la_{il}(A^s)_{lj}$:
+\[
+\sum_{s\ge0}(1-q)q^{s+1}(A^{s+1})_{ij}=q\sum_{s\ge0}\sum_la_{il}(1-q)q^s(A^s)_{lj}=q\sum_la_{il}G_{lj}.
+\]
+The finite sum over $l$ may be exchanged with the convergent series (\cref{lem:res_summable}).
+\end{proof}
+
+\begin{lemma}[Last-step identity]\label{lem:res_right}
+If $A$ is stochastic and $0\le q<1$, then for all $i,j$,
+\[
+G_{ij}=(1-q)\delta_{ij}+q\sum_lG_{il}a_{lj}.
+\]
+\end{lemma}
+\begin{proof}
+The same argument as for \cref{lem:res_left}, now with $(A^{s+1})_{ij}=\sum_l(A^s)_{il}a_{lj}$. The series $\sum_s\sum_l(1-q)q^s(A^s)_{il}a_{lj}$ converges to $\sum_lG_{il}a_{lj}$, so the shifted series sums to $q\sum_lG_{il}a_{lj}$.
+\end{proof}
+
+\subsection{The flat map}
+
+Let $\phi(r)=3r^2-2r^3$ for $r\in\R$. Note that $\phi(0)=0$ and $\phi(1)=1$.
+
+\begin{lemma}[Scalar increment]\label{lem:flat_scalar}
+Let $r,r'\in[0,1]$ and $d\in\{0,1\}$. Then
+\[
+|\phi(r')-\phi(r)|\le6|r-d|\,|r'-r|+3(r'-r)^2 .
+\]
+\end{lemma}
+\begin{proof}
+Put $\delta=r'-r$. Direct expansion gives the factorization
+\[
+\phi(r')-\phi(r)=\delta\bigl(6r(1-r)+\delta(3-4r-2r')\bigr).
+\]
+We bound the two terms in the bracket:
+\begin{itemize}
+\item $0\le 6r(1-r)\le 6|r-d|$, since $r(1-r)\le r$ and $r(1-r)\le1-r$;
+\item $|3-4r-2r'|\le3$, since $4r+2r'\in[0,6]$.
+\end{itemize}
+Hence $|\phi(r')-\phi(r)|\le|\delta|\,(6|r-d|+3|\delta|)$, which is the claim.
+\end{proof}
+
+\begin{lemma}[Weighted increment]\label{lem:flat_increment}
+Let $\iota$ be finite and let $w:\iota\to\R$ be nonnegative. Let $e\in\{0,1\}^\iota$ and $u,u'\in[0,1]^\iota$. Set
+\[
+P=\sum_Bw_B(u_B-e_B)^2,\qquad Y=\sum_Bw_B(u'_B-u_B)^2 .
+\]
+Then
+\[
+\Bigl(\sum_Bw_B|\phi(u'_B)-\phi(u_B)|\Bigr)^2\le72\,PY+18\,Y^2 .
+\]
+\end{lemma}
+\begin{proof}
+Let $S$ be the sum in parentheses and let $X=\sum_Bw_B|u_B-e_B|\,|u'_B-u_B|$. Multiplying \cref{lem:flat_scalar} by $w_B$ and summing gives $0\le S\le6X+3Y$. Cauchy--Schwarz with the weights $w_B$ gives $X^2\le PY$. Therefore
+\[
+S^2\le(6X+3Y)^2\le72X^2+18Y^2\le72PY+18Y^2. \qedhere
+\]
+\end{proof}
+
+\begin{lemma}[Flat inequality]\label{lem:flat_ineq}
+Under the hypotheses of \cref{lem:flat_increment}, set $P'=\sum_Bw_B(u'_B-e_B)^2$ and $L=\sum_Bw_B(u_B-e_B)(u'_B-u_B)$. Then
+\[
+\Bigl(\sum_Bw_B|\phi(u'_B)-\phi(u_B)|\Bigr)^2\le108\bigl(P'^2-P^2-4PL\bigr).
+\]
+\end{lemma}
+\begin{proof}
+We have $P'=P+2L+Y$, so
+\[
+R:=P'^2-P^2-4PL=2PY+(2L+Y)^2 .
+\]
+By Cauchy--Schwarz, $L^2\le PY$. Hence
+\[
+Y^2=\bigl((2L+Y)-2L\bigr)^2\le2(2L+Y)^2+8L^2\le2(2L+Y)^2+8PY .
+\]
+Using \cref{lem:flat_increment}, the left side is at most
+\[
+72PY+18Y^2\le216PY+36(2L+Y)^2\le108R. \qedhere
+\]
+\end{proof}
+
+\begin{lemma}[One-step balance]\label{lem:local_ineq}
+Assume the following.
+\begin{itemize}
+\item $\iota$ is a finite set, $m\in\Nz$, and $w:\iota\to\R$ is nonnegative.
+\item $e,u,v\in\R^\iota$ and $U_1,\dots,U_m\in\R^\iota$.
+\item $p\ge0$, $c_1,\dots,c_m\ge0$, and $p+\sum_jc_j=1$.
+\item $u=pv+\sum_jc_jU_j$ coordinatewise.
+\item $e\in\{0,1\}^\iota$ and $u,v,U_j\in[0,1]^\iota$.
+\end{itemize}
+For $a\in\R^\iota$ write $\Psi(a)=\bigl(\sum_Bw_B(a_B-e_B)^2\bigr)^2$. Then
+\[
+p\Bigl(\sum_Bw_B|\phi(v_B)-\phi(u_B)|\Bigr)^2+\sum_jc_j\Bigl(\sum_Bw_B|\phi(U_{j,B})-\phi(u_B)|\Bigr)^2
+\le108\Bigl(p\Psi(v)+\sum_jc_j\Psi(U_j)-\Psi(u)\Bigr).
+\]
+\end{lemma}
+\begin{proof}
+Let $S_0=\sum_Bw_B(u_B-e_B)^2$, so that $\Psi(u)=S_0^2$. Let $L_v$ and $L_j$ be the quantity $L$ of \cref{lem:flat_ineq} for the pairs $(u,v)$ and $(u,U_j)$.
+
+\emph{The linear terms cancel.} Coordinatewise,
+\[
+p(v_B-u_B)+\sum_jc_j(U_{j,B}-u_B)=pv_B+\sum_jc_jU_{j,B}-\Bigl(p+\sum_jc_j\Bigr)u_B=0 .
+\]
+Multiplying by $w_B(u_B-e_B)$ and summing over $B$ gives $pL_v+\sum_jc_jL_j=0$.
+
+\emph{Combining.} Apply \cref{lem:flat_ineq} to $(u,v)$ and to each $(u,U_j)$. Multiply by $p$ and by $c_j$ respectively, and add. The left side is bounded by
+\[
+108\Bigl(p\Psi(v)+\sum_jc_j\Psi(U_j)-\Bigl(p+\sum_jc_j\Bigr)S_0^2-4S_0\Bigl(pL_v+\sum_jc_jL_j\Bigr)\Bigr).
+\]
+Since $p+\sum_jc_j=1$ and $pL_v+\sum_jc_jL_j=0$, this is the claim.
+\end{proof}
+
+\begin{lemma}[Summation against the resolvent]\label{lem:global_sum}
+Assume the following.
+\begin{itemize}
+\item $\pi\in\R^n$ is nonnegative, $A,G\in\R^{n\times n}$, and $p,q\in\R$ with $p\ge0$.
+\item $G\ge0$ entrywise and $\sum_i\pi_iG_{ij}=\pi_j$ for all $j$.
+\item $G_{kj}=p\delta_{kj}+q\sum_iG_{ki}a_{ij}$ for all $k,j$.
+\item $J_d:[n]\to\R$ and $J_h,F_z,F_h:[n]\times[n]\to\R$, with $F_h\ge0$.
+\item For all $k,i$,
+\[
+pJ_d(i)+q\sum_ja_{ij}J_h(i,j)\le108\Bigl(pF_z(k,i)+q\sum_ja_{ij}F_h(k,j)-F_h(k,i)\Bigr).
+\]
+\end{itemize}
+Then
+\[
+\sum_i\pi_i\Bigl(pJ_d(i)+q\sum_ja_{ij}J_h(i,j)\Bigr)\le108\,p\sum_{k,i}\pi_kG_{ki}F_z(k,i).
+\]
+\end{lemma}
+\begin{proof}
+Write $J(i)=pJ_d(i)+q\sum_ja_{ij}J_h(i,j)$ and fix $k$.
+
+\emph{Telescoping identity.} By the identity for $G$,
+\[
+\sum_iG_{ki}\,q\sum_ja_{ij}F_h(k,j)=\sum_j\Bigl(q\sum_iG_{ki}a_{ij}\Bigr)F_h(k,j)=\sum_jG_{kj}F_h(k,j)-pF_h(k,k).
+\]
+
+\emph{Bound for fixed $k$.} Multiply the hypothesis by $\pi_kG_{ki}\ge0$ and sum over $i$. By the telescoping identity, the terms involving $F_h$ reduce to $-pF_h(k,k)\le0$, giving
+\[
+\sum_i\pi_kG_{ki}J(i)\le108\,\pi_k\Bigl(p\sum_iG_{ki}F_z(k,i)-pF_h(k,k)\Bigr)\le108\,p\sum_i\pi_kG_{ki}F_z(k,i).
+\]
+
+\emph{Summing over $k$.} Since $\pi_i=\sum_k\pi_kG_{ki}$,
+\[
+\sum_i\pi_iJ(i)=\sum_k\sum_i\pi_kG_{ki}J(i),
+\]
+and summing the previous bound over $k$ gives the claim.
+\end{proof}
+
+\begin{lemma}[The harmonic extension]\label{lem:h_props}
+Assume the following.
+\begin{itemize}
+\item $\iota$ is finite, $G,A\in\R^{n\times n}$, and $p,q\in\R$.
+\item $G\ge0$, $\sum_jG_{ij}=1$ for all $i$, and $G_{ij}=p\delta_{ij}+q\sum_la_{il}G_{lj}$ for all $i,j$.
+\item $z_1,\dots,z_n\in[0,1]^\iota$.
+\end{itemize}
+Define $h_i\in\R^\iota$ by $h_i(B)=\sum_jG_{ij}z_j(B)$. Then $h_i\in[0,1]^\iota$ and
+\[
+h_i(B)=pz_i(B)+\sum_j(qa_{ij})h_j(B)\qquad\text{for all } i,B.
+\]
+\end{lemma}
+\begin{proof}
+Each $h_i(B)$ is a convex combination of numbers in $[0,1]$, because $G\ge0$ and its rows sum to $1$. For the identity, substitute the relation for $G_{ik}$:
+\[
+h_i(B)=\sum_k\Bigl(p\delta_{ik}+q\sum_la_{il}G_{lk}\Bigr)z_k(B)=pz_i(B)+\sum_lqa_{il}\sum_kG_{lk}z_k(B)=pz_i(B)+\sum_lqa_{il}h_l(B). \qedhere
+\]
+\end{proof}
+
+\subsection{Cut decompositions}
+
+For $a:[n]\to\R$ we say that $b:\Pn\to\R$ is an \emph{upper cut decomposition of $a$} if the following three conditions hold.
+\begin{enumerate}
+\item $b(B)\ge0$ for all $B$.
+\item Whenever $b(B)\ne0$: for all $i,j$, if $j\in B$ and $a_j\le a_i$, then $i\in B$.
+\item $a_i-a_j=\sum_{B\in\Pn}b(B)\bigl(\one_B(i)-\one_B(j)\bigr)$ for all $i,j$.
+\end{enumerate}
+
+\begin{lemma}[Adding the lowest cut]\label{lem:cut_coord_upper_shift}
+Let $a:[n]\to\R$ and let $m<c$ be reals with $m\le a_i$ for all $i$, and $a_i=m$ whenever $a_i<c$. Suppose $b'$ is an upper cut decomposition of $a'=(\max(a_i,c))_i$. Then $a$ has an upper cut decomposition.
+\end{lemma}
+\begin{proof}
+Let $B^*=\{i:c\le a_i\}$. For every $k$,
+\[
+a_k=\max(a_k,c)+(c-m)\bigl(\one_{B^*}(k)-1\bigr).
+\]
+Indeed, if $c\le a_k$ both sides equal $a_k$; otherwise $a_k=m$ and the right side is $c-(c-m)$.
+
+Set $b(B)=b'(B)+(c-m)\one_{\{B=B^*\}}$. We check the three conditions.
+\begin{enumerate}
+\item $b\ge0$, since $b'\ge0$ and $c>m$.
+\item Suppose $b(B)\ne0$, $j\in B$ and $a_j\le a_i$. If $B=B^*$, then $c\le a_j\le a_i$, so $i\in B^*$. Otherwise $b'(B)=b(B)\ne0$; moreover $a_j\le a_i$ implies $\max(a_j,c)\le\max(a_i,c)$, so $i\in B$ by the property of $b'$.
+\item By the property of $b'$ and the formula for $a_k$,
+\[
+\sum_Bb(B)\bigl(\one_B(i)-\one_B(j)\bigr)=\max(a_i,c)-\max(a_j,c)+(c-m)\bigl(\one_{B^*}(i)-\one_{B^*}(j)\bigr)=a_i-a_j. \qedhere
+\]
+\end{enumerate}
+\end{proof}
+
+\begin{lemma}[Merging the two lowest values]\label{lem:cut_coord_upper_reduce}
+Let $a:[n]\to\R$ with $a_i\ne a_j$ for some $i,j$. Then there are reals $m<c$ with the following properties:
+\begin{itemize}
+\item $m\le a_i$ for all $i$;
+\item $a_i<c$ implies $a_i=m$;
+\item the set $\{\max(a_i,c):i\in[n]\}$ has strictly fewer elements than $\{a_i:i\in[n]\}$.
+\end{itemize}
+\end{lemma}
+\begin{proof}
+Let $V=\{a_i\}$ and $m=\min V$. Since $a$ is not constant, $V\setminus\{m\}\neq\emptyset$; let $c=\min(V\setminus\{m\})>m$. If $a_i<c$, then $a_i=m$, for otherwise $a_i\in V\setminus\{m\}$ and $c\le a_i$.
+
+We claim $\{\max(a_i,c)\}=V\setminus\{m\}$, which gives the cardinality statement.
+\begin{itemize}
+\item If $a_i\le c$, then $\max(a_i,c)=c\in V\setminus\{m\}$. Otherwise $\max(a_i,c)=a_i>m$.
+\item Conversely, let $a_i\in V\setminus\{m\}$. If $a_i\le c$, then $a_i=c$, since $a_i<c$ would force $a_i=m$. In either case $\max(a_i,c)=a_i$. \qedhere
+\end{itemize}
+\end{proof}
+
+\begin{lemma}[Existence of upper cut decompositions]\label{lem:cut_coord_upper}
+Every $a:[n]\to\R$ has an upper cut decomposition.
+\end{lemma}
+\begin{proof}
+We prove, by induction on $k\in\Nz$, that every $a$ taking at most $k$ distinct values has one.
+
+If $a$ is constant, $b=0$ works: condition~2 is vacuous and condition~3 reads $0=0$. This covers $n=0$.
+
+Now let $a$ be non-constant and take $m,c$ from \cref{lem:cut_coord_upper_reduce}. For $k=0$ this is impossible, as $a'=\max(a,c)$ would take fewer than $0$ values. For $k+1$, the function $a'$ takes at most $k$ values, so it has an upper cut decomposition by the induction hypothesis. \cref{lem:cut_coord_upper_shift} then yields one for $a$.
+\end{proof}
+
+\begin{lemma}[Signed and absolute cut identities]\label{lem:cut_coord_core}
+For every $a:[n]\to\R$ there is a nonnegative $b:\Pn\to\R$ such that for all $i,j$,
+\[
+a_i-a_j=\sum_Bb(B)\bigl(\one_B(i)-\one_B(j)\bigr),\qquad |a_i-a_j|=\sum_Bb(B)\bigl|\one_B(i)-\one_B(j)\bigr| .
+\]
+\end{lemma}
+\begin{proof}
+Take $b$ from \cref{lem:cut_coord_upper}. Suppose $a_j\le a_i$. We claim every term $b(B)(\one_B(i)-\one_B(j))$ equals $b(B)|\one_B(i)-\one_B(j)|$:
+\begin{itemize}
+\item this is trivial if $b(B)=0$;
+\item if $b(B)\ne0$ and $j\in B$, then $i\in B$, so the difference is $0$;
+\item if $j\notin B$, the difference is $\one_B(i)\ge0$.
+\end{itemize}
+So $|a_i-a_j|=a_i-a_j$ gives the absolute identity. The case $a_i\le a_j$ follows by symmetry.
+\end{proof}
+
+\begin{lemma}[Bounded cut weights]\label{lem:cut_coord}
+For every $a:[n]\to\R$ there is $b:\Pn\to\R$ with $0\le b(B)\le2\sum_i|a_i|$ for all $B$, such that both identities of \cref{lem:cut_coord_core} hold.
+\end{lemma}
+\begin{proof}
+Take $b$ from \cref{lem:cut_coord_core}. Let $\tilde b(B)=b(B)$ if $B$ is nonempty and $B\ne[n]$, and $\tilde b(B)=0$ otherwise. For $B=\emptyset$ or $B=[n]$, the factor $\one_B(i)-\one_B(j)$ vanishes, so both identities persist for $\tilde b$.
+
+For a nontrivial $B$, pick $i\in B$ and $j\notin B$. Keeping only the term $B$ in the absolute identity gives
+\[
+\tilde b(B)\le|a_i-a_j|\le|a_i|+|a_j|\le2\sum_k|a_k|. \qedhere
+\]
+\end{proof}
+
+\begin{lemma}[Extensionality in $\ell_1$]\label{lem:cut_l1_ext}
+If $f,g\in\ell_1$ satisfy $f(k)=g(k)$ for all $k$, then $f=g$.
+\end{lemma}
+\begin{proof}
+Elements of $\ell_1$ are sequences.
+\end{proof}
+
+\begin{lemma}[Coordinates of finite combinations]\label{lem:cut_l1_apply}
+Let $\iota$ be finite, $x_0\in\ell_1$, $c:\iota\to\R$ and $\beta:\iota\to\ell_1$. Then for every $k$,
+\[
+\Bigl(x_0+\sum_Bc_B\beta_B\Bigr)(k)=x_0(k)+\sum_Bc_B\beta_B(k).
+\]
+\end{lemma}
+\begin{proof}
+The vector space operations of $\ell_1$ are coordinatewise.
+\end{proof}
+
+\subsection{Assembly in the cut space}
+
+\begin{lemma}[Real assembly]\label{lem:assembly_real}
+Assume the following.
+\begin{itemize}
+\item $\pi\in\R^n$ is nonnegative and $A$ is stochastic.
+\item $\iota$ is finite, $w:\iota\to\R$ is nonnegative, and $z_1,\dots,z_n\in\{0,1\}^\iota$.
+\item $0\le q<1$ and $\tau(1-q)=q$.
+\item $G\in\R^{n\times n}$ satisfies: $G\ge0$; $\sum_jG_{ij}=1$ for all $i$; $\sum_i\pi_iG_{ij}=\pi_j$ for all $j$; and the identities of \cref{lem:res_left,lem:res_right}.
+\end{itemize}
+Then there are $h_1,\dots,h_n\in\R^\iota$ such that
+\begin{multline*}
+\sum_i\pi_i\Bigl(\sum_Bw_B|z_i(B)-\phi(h_i(B))|\Bigr)^2+\tau\sum_{i,j}\pi_ia_{ij}\Bigl(\sum_Bw_B|\phi(h_i(B))-\phi(h_j(B))|\Bigr)^2\\
+\le108\sum_{i,j}\pi_iG_{ij}\Bigl(\sum_Bw_B|z_i(B)-z_j(B)|\Bigr)^2 .
+\end{multline*}
+\end{lemma}
+\begin{proof}
+Let $h_i(B)=\sum_jG_{ij}z_j(B)$. By \cref{lem:h_props} with $p=1-q$, we have $h_i\in[0,1]^\iota$ and
+\[
+h_i=(1-q)z_i+\sum_jqa_{ij}h_j .
+\]
+
+\emph{Local inequality.} Fix $k,i$ and apply \cref{lem:local_ineq} with
+\[
+e=z_k,\quad u=h_i,\quad v=z_i,\quad U_j=h_j\ (m=n),\quad p=1-q,\quad c_j=qa_{ij}.
+\]
+The hypotheses hold: $1-q\ge0$, $c_j\ge0$, $(1-q)+\sum_jqa_{ij}=1$, the balance relation was just shown, and all vectors lie in $[0,1]^\iota$. For binary coordinates we have $\phi(z_i(B))=z_i(B)$ and $(z_i(B)-z_k(B))^2=|z_k(B)-z_i(B)|$. Set
+\begin{align*}
+J_d(i)&=\Bigl(\sum_Bw_B|z_i(B)-\phi(h_i(B))|\Bigr)^2, & J_h(i,j)&=\Bigl(\sum_Bw_B|\phi(h_i(B))-\phi(h_j(B))|\Bigr)^2,\\
+F_z(k,i)&=\Bigl(\sum_Bw_B|z_k(B)-z_i(B)|\Bigr)^2, & F_h(k,i)&=\Bigl(\sum_Bw_B(h_i(B)-z_k(B))^2\Bigr)^2\ge0 .
+\end{align*}
+With this notation, \cref{lem:local_ineq} reads
+\[
+(1-q)J_d(i)+q\sum_ja_{ij}J_h(i,j)\le108\Bigl((1-q)F_z(k,i)+q\sum_ja_{ij}F_h(k,j)-F_h(k,i)\Bigr).
+\]
+
+\emph{Summation.} \cref{lem:global_sum} with $p=1-q$ uses the last-step identity, $G\ge0$ and $\pi G=\pi$. Writing $S_1=\sum_i\pi_iJ_d(i)$, $S_2=\sum_{i,j}\pi_ia_{ij}J_h(i,j)$ and $R=\sum_{k,i}\pi_kG_{ki}F_z(k,i)$, it gives
+\[
+(1-q)S_1+qS_2\le108(1-q)R .
+\]
+Since $q=\tau(1-q)$, the left side equals $(1-q)(S_1+\tau S_2)$. Dividing by $1-q>0$ gives $S_1+\tau S_2\le108R$, which is the claim after renaming indices in $R$.
+\end{proof}
+
+\subsection{The $\ell_1$ cut representation}
+
+\begin{lemma}[Norm of a cut combination]\label{lem:cut_l1_norm_combo}
+Let $\iota$ be finite. Let $f\in\ell_1$, let $\beta:\iota\to\ell_1$ with $\beta_B(k)\ge0$ for all $B,k$, and let $d:\iota\to\R$. If $|f(k)|=\sum_B\beta_B(k)d_B$ for every $k$, then $\|f\|_1=\sum_B\|\beta_B\|_1d_B$.
+\end{lemma}
+\begin{proof}
+The series $\sum_k\beta_B(k)$ converge and $\|\beta_B\|_1=\sum_k\beta_B(k)$, since $\beta_B\ge0$. Exchanging the finite sum over $B$ with the series over $k$,
+\[
+\|f\|_1=\sum_k\sum_B\beta_B(k)d_B=\sum_B d_B\sum_k\beta_B(k)=\sum_B\|\beta_B\|_1d_B. \qedhere
+\]
+\end{proof}
+
+\begin{lemma}[Cut vectors]\label{lem:cut_l1_vectors}
+For $x_1,\dots,x_n\in\ell_1$ there are $\beta_B\in\ell_1$ $(B\in\Pn)$ with $\beta_B(k)\ge0$, such that for all $i,j,k$:
+\begin{align*}
+x_i(k)&=x_j(k)+\sum_B\bigl(\one_B(i)-\one_B(j)\bigr)\beta_B(k),\\
+|(x_i-x_j)(k)|&=\sum_B\beta_B(k)\bigl|\one_B(i)-\one_B(j)\bigr| .
+\end{align*}
+\end{lemma}
+\begin{proof}
+For each coordinate $k$, choose $b_k:\Pn\to\R$ by \cref{lem:cut_coord} applied to $a=(x_i(k))_i$, and set $\beta_B(k)=b_k(B)$. Then
+\[
+0\le\beta_B(k)\le2\sum_i|x_i(k)| .
+\]
+The right side is summable in $k$, since each $x_i\in\ell_1$, so $\beta_B\in\ell_1$. The two identities are the two identities of \cref{lem:cut_coord} at coordinate $k$.
+\end{proof}
+
+\begin{lemma}[Cut representation with ambient reconstruction]\label{lem:cut_l1}
+Let $n\ge1$ and $x_1,\dots,x_n\in\ell_1$. There exist
+\begin{itemize}
+\item weights $w:\Pn\to\R$ with $w\ge0$,
+\item binary vectors $z_1,\dots,z_n\in\{0,1\}^{\Pn}$, and
+\item a map $T:\R^{\Pn}\to\ell_1$
+\end{itemize}
+such that for all $i,j$ and all $u,u'\in\R^{\Pn}$:
+\begin{itemize}
+\item $T(z_i)=x_i$;
+\item $\|T(u)-T(u')\|_1\le\sum_Bw_B|u_B-u'_B|$;
+\item $\|x_i-x_j\|_1=\sum_Bw_B|z_i(B)-z_j(B)|$.
+\end{itemize}
+\end{lemma}
+\begin{proof}
+Take $\beta_B$ from \cref{lem:cut_l1_vectors} and fix the index $i_0=1$. Set
+\[
+w_B=\|\beta_B\|_1,\qquad z_i(B)=\one_B(i),\qquad T(u)=x_{i_0}+\sum_B\bigl(u_B-\one_B(i_0)\bigr)\beta_B .
+\]
+\begin{itemize}
+\item By \cref{lem:cut_l1_apply}, $T(z_i)(k)=x_{i_0}(k)+\sum_B(\one_B(i)-\one_B(i_0))\beta_B(k)=x_i(k)$. Hence $T(z_i)=x_i$ by \cref{lem:cut_l1_ext}.
+\item $T(u)-T(u')=\sum_B(u_B-u'_B)\beta_B$, and the triangle inequality gives the contraction bound.
+\item The distance identity is \cref{lem:cut_l1_norm_combo} with $f=x_i-x_j$ and $d_B=|\one_B(i)-\one_B(j)|$. \qedhere
+\end{itemize}
+\end{proof}
+
+\begin{lemma}[Assembly in $\ell_1$]\label{lem:assembly}
+Assume the hypotheses of \cref{lem:assembly_real} on $\pi,A,\iota,w,z,q,\tau,G$. Assume further that $x_1,\dots,x_n\in\ell_1$ and $T:\R^\iota\to\ell_1$ satisfy, for all $i,j$ and all $u,u'\in\R^\iota$:
+\begin{itemize}
+\item $T(z_i)=x_i$;
+\item $\|T(u)-T(u')\|_1\le\sum_Bw_B|u_B-u'_B|$;
+\item $\|x_i-x_j\|_1=\sum_Bw_B|z_i(B)-z_j(B)|$.
+\end{itemize}
+Then there are $y_1,\dots,y_n\in\ell_1$ with
+\[
+\sum_i\pi_i\|x_i-y_i\|_1^2+\tau\sum_{i,j}\pi_ia_{ij}\|y_i-y_j\|_1^2\le108\sum_{i,j}\pi_iG_{ij}\|x_i-x_j\|_1^2 .
+\]
+\end{lemma}
+\begin{proof}
+Take $h_i$ from \cref{lem:assembly_real} and set $y_i=T\bigl((\phi(h_i(B)))_B\bigr)$.
+
+\emph{Sign of $\tau$.} We have $\tau\ge0$: if $\tau<0$, then $q=\tau(1-q)<0$, since $1-q>0$, a contradiction.
+
+\emph{Comparison.} By $T(z_i)=x_i$ and the contraction property,
+\[
+\|x_i-y_i\|_1\le\sum_Bw_B|z_i(B)-\phi(h_i(B))|,\qquad \|y_i-y_j\|_1\le\sum_Bw_B|\phi(h_i(B))-\phi(h_j(B))|.
+\]
+Square these nonnegative bounds and multiply by $\pi_i\ge0$, by $\pi_ia_{ij}\ge0$ and by $\tau\ge0$ respectively. This shows that the left side is at most the left side of \cref{lem:assembly_real}. Finally, the distance identity converts the right side of that lemma into $108\sum_{i,j}\pi_iG_{ij}\|x_i-x_j\|_1^2$.
+\end{proof}
+
+\section{Proof of the theorem}
+
+\begin{proof}[Proof of \cref{thm:main}]
+Let $n,t\ge1$, $\pi$, $A$ and $x_1,\dots,x_n$ be as in the theorem.
+
+\emph{Step 1: cut representation.} Apply \cref{lem:cut_l1} to obtain $w,z,T$ with index set $\iota=\Pn$.
+
+\emph{Step 2: parameters.} Put $q=t/(t+1)$. Then $0\le q<1$ and $t(1-q)=q$, so $\tau=t$ is admissible.
+
+\emph{Step 3: the resolvent.} Let $G_{ij}=\sum_{s\ge0}(1-q)q^s(A^s)_{ij}$. By the lemmas on the resolvent:
+\begin{itemize}
+\item $G\ge0$ (\cref{lem:res_nonneg});
+\item every row of $G$ sums to $1$ (\cref{lem:res_rowsum});
+\item $\pi G=\pi$ (\cref{lem:res_stationary});
+\item $G$ satisfies the first-step and last-step identities (\cref{lem:res_left,lem:res_right}).
+\end{itemize}
+
+\emph{Step 4: construction.} \cref{lem:assembly}, using only $\pi_i\ge0$, gives $y_1,\dots,y_n\in\ell_1$ with
+\[
+\sum_i\pi_i\|x_i-y_i\|_1^2+t\sum_{i,j}\pi_ia_{ij}\|y_i-y_j\|_1^2\le108\sum_{i,j}\pi_iG_{ij}\|x_i-x_j\|_1^2 .
+\]
+
+\emph{Step 5: comparison.} By \cref{lem:res_comparison}, the right side is at most
+\[
+108\cdot28\sum_{i,j}\pi_i\Bigl(\frac1t\sum_{s=1}^t(A^s)_{ij}\Bigr)\|x_i-x_j\|_1^2 .
+\]
+Since $108\cdot28=3024$, this completes the proof.
+\end{proof}
+
+\paragraph{Relation to the source proof.} The construction is the same as in the source proof. The points are $y_i=T(\Phi(h_i))$, where $h_i=\sum_jG_{ij}z_j$ is the resolvent average of the binary cut encodings and $\Phi$ applies $\phi(r)=3r^2-2r^3$ coordinatewise. The constants are also the same: $108$ from the flat inequality and $28=2\cdot3\cdot4+2\cdot2$ from the comparison. The formal argument deviates in the following ways.
+\begin{enumerate}
+\item \emph{No probability is used.} The source constructs a killed Markov chain and an $H$-valued martingale, and applies optional stopping together with bounded and monotone convergence. Here row $k$ of $G$ plays the role of the law of the death position for the chain started at $k$. The vanishing of the conditional linear term becomes the exact cancellation $pL_v+\sum_jc_jL_j=0$ in \cref{lem:local_ineq}, applied with a centre $e=z_k$ depending on the starting state. The telescoping over time becomes the identity $G=(1-q)I+qGA$ in \cref{lem:global_sum}. The jump identity "$=B+tE_A$" of the source appears as the factorization $(1-q)S_1+qS_2=(1-q)(S_1+tS_2)$.
+\item \emph{Flat inequality.} The scalar estimate is proved by the exact factorization in \cref{lem:flat_scalar}, not by integrating $\phi'$.
+\item \emph{Comparison.} The comparison is proved through explicit generating-function sums (\cref{lem:comp_geom_sq_sqsum,lem:comp_geom_mod_hasSum}), not through the random variables $J=\lfloor S/t\rfloor$ and $R=S-tJ$.
+\item \emph{Cut representation.} The cut representation is obtained by an induction on the number of distinct values in each coordinate, with a choice of decomposition in each coordinate. It is not given by the explicit formula $b_B(k)=(\min_{B}x_i(k)-\max_{B^c}x_i(k))_+$. All $2^n$ subsets are used with nonnegative, possibly zero, weights, so the degenerate case of coinciding points needs no separate treatment.
+\item \emph{Hypotheses used.} As in the source remark, reversibility is used only through the stationarity \eqref{eq:stat}. Of the probability-vector hypothesis, only the nonnegativity of the entries of $\pi$ enters the argument.
+\end{enumerate}
+
+\appendix
+\section{Correspondence with the formal proof}
+Each lemma of the text and the Lean declaration that states it; \cref{thm:main} is \texttt{openaimath\_332\_metricmarkovcotypel1}.
+
+\begin{longtable}{@{}lll@{}}
+\toprule
+Lemma & Lean declaration & Status \\
+\midrule
+\endhead
+\cref{lem:stoch_pow} & \texttt{stoch\_pow} & verified \\
+\cref{lem:weighted_minkowski} & \texttt{weighted\_minkowski} & verified \\
+\cref{lem:markov_subadd_expand} & \texttt{markov\_subadd\_expand} & verified \\
+\cref{lem:markov_subadd_left} & \texttt{markov\_subadd\_left} & verified \\
+\cref{lem:markov_subadd_right} & \texttt{markov\_subadd\_right} & verified \\
+\cref{lem:comp_geom_sq_sqsum} & \texttt{comp\_geom\_sq\_sqsum} & verified \\
+\cref{lem:markov_subadd} & \texttt{markov\_subadd} & verified \\
+\cref{lem:comp_geom_mod_pow_le} & \texttt{comp\_geom\_mod\_pow\_le} & verified \\
+\cref{lem:comp_geom_mod_hasSum} & \texttt{comp\_geom\_mod\_hasSum} & verified \\
+\cref{lem:comp_block} & \texttt{comp\_block} & verified \\
+\cref{lem:comp_Dt} & \texttt{comp\_Dt} & verified \\
+\cref{lem:comp_geom_sq} & \texttt{comp\_geom\_sq} & verified \\
+\cref{lem:comp_geom_mod} & \texttt{comp\_geom\_mod} & verified \\
+\cref{lem:comp_real} & \texttt{comp\_real} & verified \\
+\cref{lem:res_summable} & \texttt{res\_summable} & verified \\
+\cref{lem:res_comparison} & \texttt{res\_comparison} & verified \\
+\cref{lem:res_nonneg} & \texttt{res\_nonneg} & verified \\
+\cref{lem:res_rowsum} & \texttt{res\_rowsum} & verified \\
+\cref{lem:res_stationary} & \texttt{res\_stationary} & verified \\
+\cref{lem:res_left} & \texttt{res\_left} & verified \\
+\cref{lem:res_right} & \texttt{res\_right} & verified \\
+\cref{lem:flat_scalar} & \texttt{flat\_scalar} & verified \\
+\cref{lem:flat_increment} & \texttt{flat\_increment} & verified \\
+\cref{lem:flat_ineq} & \texttt{flat\_ineq} & verified \\
+\cref{lem:local_ineq} & \texttt{local\_ineq} & verified \\
+\cref{lem:global_sum} & \texttt{global\_sum} & verified \\
+\cref{lem:h_props} & \texttt{h\_props} & verified \\
+\cref{lem:cut_coord_upper_shift} & \texttt{cut\_coord\_upper\_shift} & verified \\
+\cref{lem:cut_coord_upper_reduce} & \texttt{cut\_coord\_upper\_reduce} & verified \\
+\cref{lem:cut_coord_upper} & \texttt{cut\_coord\_upper} & verified \\
+\cref{lem:cut_coord_core} & \texttt{cut\_coord\_core} & verified \\
+\cref{lem:cut_coord} & \texttt{cut\_coord} & verified \\
+\cref{lem:cut_l1_ext} & \texttt{cut\_l1\_ext} & verified \\
+\cref{lem:cut_l1_apply} & \texttt{cut\_l1\_apply} & verified \\
+\cref{lem:assembly_real} & \texttt{assembly\_real} & verified \\
+\cref{lem:cut_l1_norm_combo} & \texttt{cut\_l1\_norm\_combo} & verified \\
+\cref{lem:cut_l1_vectors} & \texttt{cut\_l1\_vectors} & verified \\
+\cref{lem:cut_l1} & \texttt{cut\_l1} & verified \\
+\cref{lem:assembly} & \texttt{assembly} & verified \\
+\bottomrule
+\end{longtable}
+\end{document}

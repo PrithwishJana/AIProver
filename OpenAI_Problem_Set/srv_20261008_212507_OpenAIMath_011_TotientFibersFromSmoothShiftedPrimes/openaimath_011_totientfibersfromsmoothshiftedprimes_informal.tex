@@ -1,0 +1,583 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[varqu,scaled=0.95]{zi4}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{fvextra}
+\usepackage{booktabs,enumitem,microtype,needspace}
+\usepackage[colorlinks,linkcolor=MidnightBlue,citecolor=MidnightBlue,urlcolor=MidnightBlue]{hyperref}
+\usepackage[capitalise,nameinlink]{cleveref}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+\newcommand{\leanname}[1]{\texttt{\detokenize{#1}}}
+\newenvironment{leanblock}[1]
+  {\par\smallskip\Needspace{4\baselineskip}\noindent{\footnotesize\textsf{#1}}\par\nopagebreak\vspace{2pt}}
+  {\par\medskip}
+\fvset{breaklines=true,breakanywhere=true,fontsize=\footnotesize,frame=leftline,
+  framerule=0.8pt,rulecolor=\color{gray!60},xleftmargin=4pt,framesep=6pt}
+\usepackage{longtable}
+\newcommand{\unverified}{\quad\textup{\small[not machine-verified]}}
+
+\newcommand{\floorp}[1]{\lfloor #1\rfloor_{+}}
+\newcommand{\ltwo}{\ell_{2}}
+
+\title{Large totient fibers from smooth shifted primes: a conditional proof of Erd\H{o}s's conjecture}
+\date{}
+\begin{document}
+\maketitle
+\begin{abstract}
+Let $g(n)$ be the number of positive integers $m$ with $\varphi(m)=n$. We assume a hypothesis on smooth shifted primes: in $(2x,5x]$ there are at least $x^{1-\eta}$ primes $p$ with $p-1$ being $x^{\delta}$-smooth. Under this hypothesis we show that for every $\varepsilon>0$ there are infinitely many $n$ with $g(n)>n^{1-\varepsilon}$. The argument is the classical product-and-pigeonhole method (Pomerance, Theorem B). We take the products of $k\approx x^{2\delta}$ such primes, and their totients form a family of smooth numbers that is small compared with $\binom{M}{k}$, so some value $n$ is hit very often. The proof is split into elementary counting lemmas, explicit real-variable estimates, and a final assembly. Every lemma and the main theorem are machine-verified, with the smooth-shifted-primes hypothesis taken as an explicit assumption. The quantitative bound $g(n)\ll_\eta n^{1+\eta}$ of the source is not part of the formalization; only finiteness of the fibers is proved.
+\end{abstract}
+
+\begin{center}\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+Source & openai/math@fd4aeeb, family 11, OpenAIMath\_011\_TotientFibersFromSmoothShiftedPrimes \\
+Status & proof machine-verified (Lean 4, Mathlib) \\
+Lemmas & 20 \\
+Text & written by claude-opus-5-5, checked against the Lean source \\
+Run & \texttt{srv\_20261008\_212507\_OpenAIMath\_011\_TotientFibersFromSmoothShiftedPrimes} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\tableofcontents
+
+\section{Setting}
+
+Throughout, $\varphi$ is Euler's totient function on the nonnegative integers, with $\varphi(0)=0$. All sets of integers below are subsets of $\mathbb{N}=\{0,1,2,\dots\}$. For $p\ge1$ the symbol $p-1$ has its usual meaning. For a real number $t$ we write
+\[
+\floorp{t}=\max(\lfloor t\rfloor,0)\in\mathbb{N}
+\]
+for the floor truncated at $0$. For $N\in\mathbb{N}$ we let $\ltwo(N)$ be the largest $e\in\mathbb{N}$ with $2^e\le N$ when $N\ge1$, and we put $\ltwo(0)=0$. Thus $\ltwo(N)=\lfloor\log_2 N\rfloor$ for $N\ge1$. Powers $a^{s}$ with a real exponent denote Mathlib's real power function, which is defined for every real base $a$ and agrees with $\exp(s\log a)$ for $a>0$. In most statements below the base is positive. The exceptions are Hypothesis (H), \cref{lem:asymp_main_rhs_log} and \cref{lem:exists_prime_finset}, where the base may be any real number; they are discussed where they occur.
+
+\begin{definition}[Fiber count]
+For $n\in\mathbb{N}$ let
+\[
+g(n)=\#\{m\in\mathbb{N}:\ m>0,\ \varphi(m)=n\}.
+\]
+The convention is that $g(n)=0$ if this set were infinite. By \cref{lem:totient_fiber_finite} the set is always finite, so $g(n)$ is its genuine cardinality.
+\end{definition}
+
+\begin{definition}[Smoothness]
+Let $m\in\mathbb{N}$ and $y\in\mathbb{R}$. We say $m$ is \emph{$y$-smooth} if every prime factor $q$ of $m$ satisfies $q\le y$. For $m>1$ this means $P^+(m)\le y$. The integers $0$ and $1$ have no prime factors and are $y$-smooth for every $y$.
+\end{definition}
+
+\begin{definition}[Hypothesis (H)]
+\emph{Hypothesis (H)} is the statement that for all real $\delta$ with $0<\delta<1/4$ and all real $\eta>0$ there is a real $x_0$ such that for every real $x\ge x_0$
+\[
+\#\{p:\ p \text{ prime},\ 2x<p\le 5x,\ p-1 \text{ is } x^{\delta}\text{-smooth}\}\ \ge\ x^{1-\eta}.
+\]
+\end{definition}
+
+The statement is unchanged if $x_0$ is replaced by $\max(x_0,1)$. Hence only $x\ge1$ matters, and there $x^\delta$ and $x^{1-\eta}$ are the usual real powers. The counted set is finite because its elements are at most $5x$.
+
+The problem states the result conditionally on (H), and \cref{thm:main} is exactly this conditional statement. In the source paper, (H) is Theorem 1.2, proved separately; it is not formalized here, so the unconditional conjecture would further require a proof of (H) as defined above.
+
+\begin{theorem}\label{thm:main}
+Assume Hypothesis (H). Then for every real $\varepsilon>0$ the set
+\[
+\{n\in\mathbb{N}:\ n>0,\ g(n)>n^{1-\varepsilon}\}
+\]
+is infinite.
+\end{theorem}
+
+This is the conclusion of Erd\H{o}s's conjecture under (H), as the problem states it. The source also proves, as Lemma 1, that every fiber is finite and that $g(n)\ll_\eta n^{1+\eta}$. Only the finiteness is formalized here (\cref{lem:totient_fiber_finite}); the upper bound $g(n)\ll_\eta n^{1+\eta}$ is neither proved nor used.
+
+\section{Lemmas}
+
+\subsection{Fibers of the totient and products of primes}
+
+\begin{lemma}[Finiteness of totient fibers]\label{lem:totient_fiber_finite}
+For every $n\in\mathbb{N}$ the set $\{m\in\mathbb{N}: m>0,\ \varphi(m)=n\}$ is finite.
+\end{lemma}
+
+\begin{proof}
+\emph{Case $n=0$.} If $m>0$ then $\varphi(m)\ge1$, so the set is empty.
+
+\emph{Case $n>0$.} Put $B=(n+1)^{(n+2)n}$. We show that every $m>0$ with $\varphi(m)=n$ satisfies $m\le B$; this gives finiteness.
+
+Write $m=\prod_{p\mid m}p^{a_p}$ with $a_p=v_p(m)\ge1$. Fix a prime $p\mid m$ and put $a=a_p$. Since $p^a\mid m$, we have $\varphi(p^a)\mid\varphi(m)=n$; here we use the standard fact that $d\mid m$ implies $\varphi(d)\mid\varphi(m)$. Moreover $\varphi(p^a)=p^{a-1}(p-1)$. This gives two consequences:
+
+\begin{itemize}
+\item From $p-1\mid n$ and $n>0$ we get $p-1\le n$, that is, $p\le n+1$.
+\item From $p^{a-1}\mid n$ we get $p^{a-1}\le n$. By induction $j+1\le 2^j$ for all $j\in\mathbb{N}$. Hence
+\[
+a\le 2^{a-1}\le p^{a-1}\le n .
+\]
+\end{itemize}
+
+All prime factors of $m$ lie in $\{0,1,\dots,n+1\}$, so there are at most $n+2$ of them. Therefore $\sum_{p\mid m}a_p\le (n+2)n$, and
+\[
+m=\prod_{p\mid m}p^{a_p}\le\prod_{p\mid m}(n+1)^{a_p}=(n+1)^{\sum_p a_p}\le (n+1)^{(n+2)n}=B. \qedhere
+\]
+\end{proof}
+
+\begin{lemma}[Fiber count dominates any subset]\label{lem:card_le_totientFiberCard}
+Let $n\in\mathbb{N}$, and let $T\subset\mathbb{N}$ be a finite set such that every $m\in T$ satisfies $m>0$ and $\varphi(m)=n$. Then $|T|\le g(n)$.
+\end{lemma}
+
+\begin{proof}
+By \cref{lem:totient_fiber_finite} the fiber $\{m>0:\varphi(m)=n\}$ is finite, so $g(n)$ is its cardinality. The set $T$ is a subset of this fiber, hence $|T|\le g(n)$.
+\end{proof}
+
+\begin{lemma}[Totient of a squarefree product]\label{lem:totient_prod_primes}
+Let $Q$ be a finite set of primes. Then
+\[
+\varphi\Bigl(\prod_{p\in Q}p\Bigr)=\prod_{p\in Q}(p-1).
+\]
+\end{lemma}
+
+\begin{proof}
+We use induction on $|Q|$. The empty case reads $\varphi(1)=1$.
+
+Suppose $Q=Q'\cup\{p\}$ with $p\notin Q'$. Each $q\in Q'$ is a prime different from $p$, so $q$ is coprime to $p$. Hence $\prod_{q\in Q'}q$ is coprime to $p$. By multiplicativity of $\varphi$, the induction hypothesis and $\varphi(p)=p-1$,
+\[
+\varphi\Bigl(p\prod_{q\in Q'}q\Bigr)=\varphi(p)\,\varphi\Bigl(\prod_{q\in Q'}q\Bigr)=(p-1)\prod_{q\in Q'}(q-1). \qedhere
+\]
+\end{proof}
+
+\begin{lemma}[Products of distinct primes determine the set]\label{lem:prod_primes_inj}
+Let $Q_1,Q_2$ be finite sets of primes with $\prod_{p\in Q_1}p=\prod_{p\in Q_2}p$. Then $Q_1=Q_2$.
+\end{lemma}
+
+\begin{proof}
+For a finite set $Q$ of primes, the set of prime factors of $\prod_{p\in Q}p$ is exactly $Q$. Hence
+\[
+Q_1=\{\text{prime factors of }\textstyle\prod_{Q_1}p\}=\{\text{prime factors of }\textstyle\prod_{Q_2}p\}=Q_2. \qedhere
+\]
+\end{proof}
+
+\begin{lemma}[Pigeonhole for totients of $k$-fold products]\label{lem:exists_large_fiber}
+Let $S$ be a finite set of primes and let $k\in\mathbb{N}$ with $k\le|S|$. Let $V\subset\mathbb{N}$ be a finite set such that
+\[
+\prod_{p\in Q}(p-1)\in V\quad\text{for every } Q\subseteq S \text{ with } |Q|=k.
+\]
+Then there is $Q\subseteq S$ with $|Q|=k$ and
+\[
+\binom{|S|}{k}\ \le\ |V|\cdot g\Bigl(\prod_{p\in Q}(p-1)\Bigr).
+\]
+\end{lemma}
+
+\begin{proof}
+Let $\mathcal T$ be the family of $k$-element subsets of $S$, and put $f(Q)=\prod_{p\in Q}(p-1)$. Then $|\mathcal T|=\binom{|S|}{k}$, and this number is positive because $k\le|S|$. By hypothesis $f$ maps $\mathcal T$ into $V$, so
+\[
+|\mathcal T|=\sum_{v\in V}|\mathcal T_v|,\qquad \mathcal T_v=\{Q\in\mathcal T: f(Q)=v\}.
+\]
+If $V$ were empty, $\mathcal T$ would be empty, contradicting $|\mathcal T|>0$.
+
+Choose $n\in V$ with $|\mathcal T_n|$ maximal. Then $|\mathcal T|\le |V|\,|\mathcal T_n|$. Since $|\mathcal T|>0$, the family $\mathcal T_n$ is nonempty; pick $Q\in\mathcal T_n$. Then $Q\subseteq S$, $|Q|=k$ and $f(Q)=n$. It remains to show $|\mathcal T_n|\le g(n)$.
+
+Consider the map $R\mapsto \prod_{p\in R}p$ on $\mathcal T_n$.
+\begin{itemize}
+\item It is injective by \cref{lem:prod_primes_inj}.
+\item Each image $m=\prod_{p\in R}p$ is positive.
+\item By \cref{lem:totient_prod_primes}, $\varphi(m)=\prod_{p\in R}(p-1)=n$.
+\end{itemize}
+Thus the image is a set of $|\mathcal T_n|$ positive integers in the fiber of $n$. By \cref{lem:card_le_totientFiberCard}, $|\mathcal T_n|\le g(n)$. Hence
+\[
+\binom{|S|}{k}\le|V|\,g(n)=|V|\,g\bigl(f(Q)\bigr). \qedhere
+\]
+\end{proof}
+
+\subsection{Counting smooth values}
+
+\begin{lemma}[Few smooth numbers up to $N$]\label{lem:smooth_count}
+Let $N\in\mathbb{N}$ and $y\in\mathbb{R}$. There is a finite set $V\subset\mathbb{N}$ with
+\[
+|V|\le\bigl(\ltwo(N)+1\bigr)^{\floorp{y}}
+\]
+such that every $y$-smooth integer $n$ with $0<n\le N$ belongs to $V$.
+\end{lemma}
+
+\begin{proof}
+Let $P$ be the set of primes in $\{1,\dots,\floorp{y}\}$, and put $L=\ltwo(N)$. Define
+\[
+V=\Bigl\{\prod_{p\in P}p^{e_p}:\ e\in\{0,\dots,L\}^{P}\Bigr\}.
+\]
+Then
+\[
+|V|\le(L+1)^{|P|}\le(L+1)^{\floorp{y}},
+\]
+because $|P|\le\floorp{y}$ and $L+1\ge1$.
+
+Now let $0<n\le N$ be $y$-smooth.
+
+\emph{Prime factors of $n$ lie in $P$.} Every prime factor $q$ of $n$ is an integer with $q\le y$, hence $q\le\floorp{y}$, and so $q\in P$. Consequently
+\[
+n=\prod_{p\in P}p^{v_p(n)},
+\]
+since primes of $P$ not dividing $n$ contribute $p^0=1$.
+
+\emph{Exponents are at most $L$.} For $p\in P$ we have $p^{v_p(n)}\mid n$ and $p\ge2$. Hence $2^{v_p(n)}\le p^{v_p(n)}\le n\le N$, which gives $v_p(n)\le L$.
+
+So $n$ is the value at the exponent vector $(v_p(n))_{p\in P}\in\{0,\dots,L\}^P$, and $n\in V$.
+\end{proof}
+
+\begin{lemma}[Products of smooth shifted primes]\label{lem:prod_smooth_bounded}
+Let $Q\subset\mathbb{N}$ be finite, let $y\in\mathbb{R}$ and let $B\in\mathbb{N}$. Suppose that every $p\in Q$ satisfies $p\ge 2$ (that is, $p-1>0$), $p-1\le B$, and that $p-1$ is $y$-smooth. Then $n=\prod_{p\in Q}(p-1)$ satisfies the following:
+\begin{itemize}
+\item $n>0$;
+\item $n\le B^{|Q|}$;
+\item $n$ is $y$-smooth.
+\end{itemize}
+\end{lemma}
+
+\begin{proof}
+Positivity and the bound $n\le\prod_{p\in Q}B=B^{|Q|}$ are immediate from the factorwise properties.
+
+For smoothness, let $q$ be a prime factor of $n$. Since $q$ is prime and divides the product, $q$ divides $p-1$ for some $p\in Q$. As $p-1\ne0$, $q$ is a prime factor of $p-1$, and $p-1$ is $y$-smooth. Hence $q\le y$.
+\end{proof}
+
+\subsection{Elementary real estimates}
+
+\begin{lemma}[Lower bound for binomial coefficients]\label{lem:choose_ge_pow_div}
+For $M,k\in\mathbb{N}$ with $k\le M$,
+\[
+\Bigl(\frac{M}{k}\Bigr)^{k}\le\binom{M}{k}.
+\]
+For $k=0$, with the convention $M/0=0$, this reads $1\le1$.
+\end{lemma}
+
+\begin{proof}
+Let $k\ge1$. Since $k\le M$, we have $M/k\ge1$.
+
+\emph{Factorwise bound.} For $0\le j<k$,
+\[
+M-j\ \ge\ M-\frac{M}{k}\,j=\frac{M}{k}(k-j),
+\]
+because $(M/k)j\ge j$.
+
+\emph{Product.} All factors are nonnegative, so
+\[
+k!\binom{M}{k}=\prod_{j=0}^{k-1}(M-j)\ \ge\ \prod_{j=0}^{k-1}\frac Mk(k-j)=\Bigl(\frac Mk\Bigr)^k k!.
+\]
+Dividing by $k!>0$ gives the claim.
+\end{proof}
+
+\begin{lemma}[Logarithmic bound for the value count]\label{lem:asymp_log_ineq_growth_logbound}
+Let $\delta>0$ and $x\ge1$ be real. Then
+\[
+\log\Bigl(\frac{x^{2\delta}\log(5x)}{\log 2}+1\Bigr)\ \le\ \log 11+(2\delta+1)\log x.
+\]
+\end{lemma}
+
+\begin{proof}
+\emph{Two numerical facts.} First, $\log 5<2$, because
+\[
+e^2\ge\sum_{m=0}^{7}\frac{2^m}{m!}=\frac{155}{21}>5.
+\]
+Second, $\log 2>3/10$, because the exponential series with its standard tail bound gives
+\[
+e^{3/10}\le\sum_{m=0}^{7}\frac{(3/10)^m}{m!}+\frac{(3/10)^8\cdot 9}{8!\cdot 8}<2.
+\]
+In particular $10\log2>3$.
+
+\emph{Bound for $\log(5x)/\log 2$.} Using $\log x\le x-1\le x$ and $x\ge1$,
+\[
+\log(5x)=\log5+\log x\le 2+x\le 3x<10\log2\cdot x .
+\]
+Hence $\log(5x)/\log 2\le 10x$.
+
+\emph{Conclusion.} Write
+\[
+\frac{x^{2\delta}\log(5x)}{\log2}+1=x^{2\delta}\Bigl(\frac{\log(5x)}{\log 2}+x^{-2\delta}\Bigr).
+\]
+Both factors are positive; note $\log(5x)>0$. Since $x^{-2\delta}\le1$, the second factor is at most $10x+1\le 11x$. Taking logarithms,
+\[
+\log\Bigl(\frac{x^{2\delta}\log(5x)}{\log2}+1\Bigr)\le 2\delta\log x+\log 11+\log x. \qedhere
+\]
+\end{proof}
+
+\begin{lemma}[$\log x$ and $x^\delta$ are eventually large]\label{lem:asymp_log_ineq_growth_eventually}
+Let $\delta>0$ and $a,b\in\mathbb{R}$. There is $x_0\ge1$ such that $a\le\log x$ and $b\le x^\delta$ for all $x\ge x_0$.
+\end{lemma}
+
+\begin{proof}
+Both $\log x$ and $x^\delta$ tend to $+\infty$ as $x\to\infty$. Choose thresholds for $a$ and $b$ separately, and take $x_0$ to be the maximum of these two thresholds and $1$.
+\end{proof}
+
+\begin{lemma}[Growth comparison]\label{lem:asymp_log_ineq_growth}
+Let $\delta>0$, $c\in\mathbb{R}$ and $d>0$. There is $x_0\ge1$ such that for all $x\ge x_0$
+\[
+x^{\delta}\log\Bigl(\frac{x^{2\delta}\log(5x)}{\log 2}+1\Bigr)+c\,x^{2\delta}\ <\ d\,x^{2\delta}\log x .
+\]
+\end{lemma}
+
+\begin{proof}
+Apply \cref{lem:asymp_log_ineq_growth_eventually} with
+\[
+a=\max\bigl(1,\,2(|c|+1)/d\bigr),\qquad b=2(\log 11+2\delta+1)/d .
+\]
+Let $x\ge x_0$, and put $u=x^\delta>0$ and $L=\log x$. Then
+\[
+L\ge1,\qquad dL\ge 2(|c|+1),\qquad du\ge 2(\log11+2\delta+1).
+\]
+
+\emph{Key inequality.} Since $L\ge1$ and $\log 11>0$,
+\[
+\log 11+(2\delta+1)L\le(\log11+2\delta+1)L\le\tfrac12 duL.
+\]
+Also $cu<(|c|+1)u\le\tfrac12 dLu$. Adding,
+\[
+\log 11+(2\delta+1)L+cu<duL.
+\]
+
+\emph{Conclusion.} Multiply by $u>0$ and use $x^{2\delta}=u^2$:
+\[
+u\bigl(\log11+(2\delta+1)L\bigr)+c\,x^{2\delta}<d\,x^{2\delta}L.
+\]
+By \cref{lem:asymp_log_ineq_growth_logbound}, $u\log\bigl(x^{2\delta}\log(5x)/\log2+1\bigr)\le u\bigl(\log 11+(2\delta+1)L\bigr)$, and the claim follows.
+\end{proof}
+
+\begin{lemma}[Pointwise passage to $k=\floorp{x^{2\delta}}$]\label{lem:asymp_log_ineq_pointwise}
+Let $\delta,\varepsilon,x$ be real with $\delta>0$, $4\delta<\varepsilon<1$ and $x>1$. Assume
+\[
+x^{\delta}\log\Bigl(\frac{x^{2\delta}\log(5x)}{\log2}+1\Bigr)+(1-\varepsilon)\log5\cdot x^{2\delta}<\frac{\delta}{2}\,x^{2\delta}\log x. \tag{$\ast$}
+\]
+Put $k=\floorp{x^{2\delta}}$. Then
+\begin{itemize}
+\item $1\le k$;
+\item $k\le x^{1-\delta}$;
+\item and
+\[
+x^{\delta}\log\Bigl(\frac{k\log(5x)}{\log2}+1\Bigr)+(1-\varepsilon)k\log(5x)\ <\ k\log\Bigl(\frac{x^{1-\delta}}{k}\Bigr).
+\]
+\end{itemize}
+\end{lemma}
+
+\begin{proof}
+Put $y=x^{2\delta}$ and $L=\log x>0$.
+
+\emph{The first two claims.} We have $y\ge1$, so $k\ge1$, $k\le y$ and $y<k+1$. Since $3\delta<\tfrac34\varepsilon<1$, we have $2\delta\le1-\delta$, so $k\le y\le x^{1-\delta}$.
+
+\emph{Lower bound for the right side.} From $k\le y$ we get $\log k\le 2\delta L$. Hence
+\[
+k\log(x^{1-\delta}/k)=k\bigl((1-\delta)L-\log k\bigr)\ge(1-3\delta)kL.
+\]
+
+\emph{Upper bound for the left side.} The first term is at most $x^\delta\log\bigl(y\log(5x)/\log2+1\bigr)$, by monotonicity of $\log$ and $k\le y$. The second term equals
+\[
+(1-\varepsilon)\log5\cdot k+(1-\varepsilon)kL\le(1-\varepsilon)\log5\cdot y+(1-\varepsilon)kL .
+\]
+By $(\ast)$ and $y<k+1$, the left side is therefore less than
+\[
+\tfrac{\delta}{2}(k+1)L+(1-\varepsilon)kL .
+\]
+
+\emph{Comparison.} It suffices to show $\tfrac\delta2(k+1)\le(\varepsilon-3\delta)k$. This holds because
+\[
+(\varepsilon-3\delta)k=(\varepsilon-4\delta)k+\delta k\ge\delta k\ge\tfrac\delta2(k+1),
+\]
+where we used $k\ge1$.
+\end{proof}
+
+\begin{lemma}[Eventual inequality for $k=\floorp{x^{2\delta}}$]\label{lem:asymp_log_ineq}
+Let $\delta>0$ and $4\delta<\varepsilon<1$. There is $x_0\ge1$ such that for every real $x\ge x_0$ the three conclusions of \cref{lem:asymp_log_ineq_pointwise} hold with $k=\floorp{x^{2\delta}}$.
+\end{lemma}
+
+\begin{proof}
+Take $x_0'$ from \cref{lem:asymp_log_ineq_growth} with $c=(1-\varepsilon)\log5$ and $d=\delta/2$, and put $x_0=x_0'+1$. For $x\ge x_0$ we have $x>1$ and $(\ast)$ holds. Now apply \cref{lem:asymp_log_ineq_pointwise}.
+\end{proof}
+
+\begin{lemma}[Logarithm of the value bound]\label{lem:asymp_main_lhs_log}
+Let $x,\delta,\varepsilon\in\mathbb{R}$ with $x\ge1$ and $\varepsilon<1$, and let $k\in\mathbb{N}$. Put $N=\floorp{5x}$, $A=\ltwo(N^k)+1$ and $t=\floorp{x^\delta}$. Then $A^{t}\,(N^k)^{1-\varepsilon}>0$, and
+\[
+\log\Bigl(A^{t}\,(N^k)^{1-\varepsilon}\Bigr)\ \le\ x^\delta\log\Bigl(\frac{k\log(5x)}{\log2}+1\Bigr)+(1-\varepsilon)k\log(5x).
+\]
+\end{lemma}
+
+\begin{proof}
+We have $1\le N\le5x$, so both factors are positive. Moreover
+\[
+\log\bigl(A^t(N^k)^{1-\varepsilon}\bigr)=t\log A+(1-\varepsilon)k\log N .
+\]
+
+\emph{First term.} From $2^{\ltwo(N^k)}\le N^k$ we get
+\[
+\ltwo(N^k)\le\frac{k\log N}{\log2}\le\frac{k\log(5x)}{\log2},
+\]
+hence $\log A\le\log\bigl(k\log(5x)/\log2+1\bigr)$. This right side is nonnegative, and $t\le x^\delta$, so $t\log A\le x^\delta\log\bigl(k\log(5x)/\log2+1\bigr)$.
+
+\emph{Second term.} Since $1-\varepsilon>0$ and $\log N\le\log(5x)$, we have $(1-\varepsilon)k\log N\le(1-\varepsilon)k\log(5x)$.
+\end{proof}
+
+\begin{lemma}[Logarithm of the binomial lower bound]\label{lem:asymp_main_rhs_log}
+Let $x,\delta\in\mathbb{R}$ and $k,M\in\mathbb{N}$ with $k\ge1$, $k\le x^{1-\delta}$ and $x^{1-\delta}\le M$. Then
+\[
+k\log\Bigl(\frac{x^{1-\delta}}{k}\Bigr)\le\log\binom{M}{k}.
+\]
+\end{lemma}
+
+No sign condition on $x$ is imposed. The lemma holds for every real $x$, with $x^{1-\delta}$ read as Mathlib's real power function. The proof uses only the hypotheses $k\le x^{1-\delta}$ and $k>0$, not the value of $x$.
+
+\begin{proof}
+We have $k\le M$, so $\binom Mk>0$. Also $0<x^{1-\delta}/k\le M/k$. Hence, using \cref{lem:choose_ge_pow_div} in the last step,
+\[
+k\log\frac{x^{1-\delta}}{k}\le k\log\frac Mk=\log\Bigl(\frac Mk\Bigr)^k\le\log\binom Mk. \qedhere
+\]
+\end{proof}
+
+\begin{lemma}[Main asymptotic inequality]\label{lem:asymp_main}
+Let $\delta>0$ and $4\delta<\varepsilon<1$. There is $x_0\ge1$ with the following property. Let $x\ge x_0$ be real and let $M\in\mathbb{N}$ with $x^{1-\delta}\le M$. Put $k=\floorp{x^{2\delta}}$ and $N=\floorp{5x}$. Then
+\begin{itemize}
+\item $1\le k\le M$;
+\item and
+\[
+\bigl(\ltwo(N^k)+1\bigr)^{\floorp{x^\delta}}\,(N^k)^{1-\varepsilon}<\binom{M}{k}.
+\]
+\end{itemize}
+\end{lemma}
+
+\begin{proof}
+Take $x_0$ from \cref{lem:asymp_log_ineq}. Then $1\le k\le x^{1-\delta}\le M$.
+
+By \cref{lem:asymp_main_lhs_log}, the logarithm of the left side is at most
+\[
+x^\delta\log\bigl(k\log(5x)/\log2+1\bigr)+(1-\varepsilon)k\log(5x).
+\]
+By \cref{lem:asymp_log_ineq}, this quantity is strictly smaller than $k\log(x^{1-\delta}/k)$. By \cref{lem:asymp_main_rhs_log}, that in turn is at most $\log\binom Mk$.
+
+Both sides are positive, so exponentiating gives the claim.
+\end{proof}
+
+\subsection{Assembly}
+
+\begin{lemma}[A finite set of smooth shifted primes]\label{lem:exists_prime_finset}
+Assume (H). Let $0<\delta<1/4$ and $\eta>0$. There is $x_0$ such that for every real $x\ge x_0$ there is a finite set $S\subset\mathbb{N}$ with $|S|\ge x^{1-\eta}$ such that every $p\in S$ satisfies:
+\begin{itemize}
+\item $p$ is prime;
+\item $2x<p\le5x$;
+\item $p-1$ is $x^\delta$-smooth.
+\end{itemize}
+\end{lemma}
+
+The statement does not require $x_0\ge1$. If $x_0<1$, the powers $x^\delta$ and $x^{1-\eta}$ for $x<0$ are Mathlib's real power at a negative base. The threshold may, however, always be taken to be at least $1$, and the proof below does so.
+
+\begin{proof}
+Apply (H) with $\delta$ and $\eta/2$ to obtain $x_0'$, and put $x_0=\max(x_0',1)$. Let $x\ge x_0$.
+
+The set $S$ of primes $p$ with $2x<p\le5x$ and $p-1$ being $x^\delta$-smooth lies in $\{0,\dots,\floorp{5x}\}$, so it is finite. By (H),
+\[
+|S|\ge x^{1-\eta/2}\ge x^{1-\eta},
+\]
+where the last inequality uses $x\ge1$.
+\end{proof}
+
+\begin{lemma}[A large fiber above $x$]\label{lem:good_n_from_finset}
+Let $S\subset\mathbb{N}$ be finite, let $x,\delta,\varepsilon\in\mathbb{R}$ with $x\ge1$ and $\varepsilon<1$, and let $k\in\mathbb{N}$. Assume that every $p\in S$ is prime with $2x<p\le5x$ and $p-1$ being $x^\delta$-smooth, that $1\le k\le|S|$, and that, with $N=\floorp{5x}$,
+\[
+\bigl(\ltwo(N^k)+1\bigr)^{\floorp{x^\delta}}(N^k)^{1-\varepsilon}<\binom{|S|}{k}. \tag{$\ast\ast$}
+\]
+Then there is $n\in\mathbb{N}$ with $n>x$, $n>0$ and $g(n)>n^{1-\varepsilon}$.
+\end{lemma}
+
+\begin{proof}
+\emph{Setting up the value set.} Each $p\in S$ satisfies $p\ge2$, and $p\le N$ because $p$ is an integer with $p\le5x$. Hence $0<p-1\le N$.
+
+Let $V$ be the set given by \cref{lem:smooth_count} for $N^k$ and $y=x^\delta$. Then $|V|\le(\ltwo(N^k)+1)^{\floorp{x^\delta}}$. For $Q\subseteq S$ with $|Q|=k$, \cref{lem:prod_smooth_bounded} with $B=N$ shows that $\prod_{p\in Q}(p-1)$ is positive, at most $N^k$ and $x^\delta$-smooth. Hence this product lies in $V$.
+
+\emph{Choosing $n$.} By \cref{lem:exists_large_fiber} there is $Q\subseteq S$ with $|Q|=k$ and
+\[
+\binom{|S|}k\le|V|\,g(n),\qquad n=\prod_{p\in Q}(p-1).
+\]
+By \cref{lem:prod_smooth_bounded}, $0<n\le N^k$.
+
+\emph{The bound $n>x$.} Since $k\ge1$, there is some $p_0\in Q$. Then $p_0-1\mid n$, so
+\[
+n\ge p_0-1>2x-1\ge x .
+\]
+
+\emph{The bound $g(n)>n^{1-\varepsilon}$.} Suppose instead $g(n)\le n^{1-\varepsilon}$. Since $1-\varepsilon>0$ and $n\le N^k$,
+\[
+|V|\,g(n)\le|V|\,n^{1-\varepsilon}\le|V|\,(N^k)^{1-\varepsilon}\le\bigl(\ltwo(N^k)+1\bigr)^{\floorp{x^\delta}}(N^k)^{1-\varepsilon}<\binom{|S|}k\le|V|\,g(n),
+\]
+where the strict inequality is $(\ast\ast)$. This is a contradiction.
+\end{proof}
+
+\begin{lemma}[Arbitrarily large good $n$]\label{lem:exists_good_n_large}
+Assume (H). Let $0<\varepsilon<1$ and $C\in\mathbb{R}$. There is $n\in\mathbb{N}$ with $n>C$, $n>0$ and $g(n)>n^{1-\varepsilon}$.
+\end{lemma}
+
+\begin{proof}
+Put $\delta=\varepsilon/8$. Then $0<\delta<1/4$ and $4\delta=\varepsilon/2<\varepsilon$.
+
+Take $x_0$ from \cref{lem:exists_prime_finset} with this $\delta$ and $\eta=\varepsilon/8$. Take $x_1$ from \cref{lem:asymp_main} with $\delta$ and $\varepsilon$. Let $x=\max(x_0,x_1,C,1)$.
+
+By \cref{lem:exists_prime_finset} there is a finite set $S$ of primes in $(2x,5x]$ with $p-1$ being $x^\delta$-smooth and $|S|\ge x^{1-\delta}$. By \cref{lem:asymp_main} with $M=|S|$, the integer $k=\floorp{x^{2\delta}}$ satisfies $1\le k\le|S|$ together with $(\ast\ast)$.
+
+\Cref{lem:good_n_from_finset} now gives $n>x\ge C$ with $n>0$ and $g(n)>n^{1-\varepsilon}$.
+\end{proof}
+
+\begin{lemma}[The case $\varepsilon<1$]\label{lem:infinite_of_lt_one}
+Assume (H) and let $0<\varepsilon<1$. Then the set $\{n\in\mathbb{N}:n>0,\ g(n)>n^{1-\varepsilon}\}$ is infinite.
+\end{lemma}
+
+\begin{proof}
+Suppose the set were finite. Then it would be bounded above by some $M\in\mathbb{N}$. \Cref{lem:exists_good_n_large} with $C=\max(M,0)$ gives an element $n>M$ of the set, which is a contradiction.
+\end{proof}
+
+\section{Proof of the theorem}
+
+\begin{proof}[Proof of \cref{thm:main}]
+Let $\varepsilon>0$.
+
+\emph{Case $\varepsilon<1$.} This is \cref{lem:infinite_of_lt_one}.
+
+\emph{Case $\varepsilon\ge1$.} By \cref{lem:infinite_of_lt_one}, the set
+\[
+\{n>0: g(n)>n^{1/2}\}
+\]
+is infinite. For every integer $n\ge1$ we have $n^{1-\varepsilon}\le n^{1/2}$, because $1-\varepsilon\le1/2$. Hence this infinite set is contained in $\{n>0:g(n)>n^{1-\varepsilon}\}$, which is therefore infinite.
+\end{proof}
+
+\paragraph{Relation to the source proof.}
+The argument is the product-and-pigeonhole proof of the source. Products of $k\approx x^{2\delta}$ smooth shifted primes have smooth totients, and these totients form a set of size $x^{o(k)}$. In contrast there are $\binom{M}{k}\ge(M/k)^k$ products, so some totient value is attained very often. The formalization deviates in the following points.
+
+\begin{itemize}
+\item \emph{Normalization of the parameters.} The source normalizes by primes $p\le X$, with more than $X^{1-\delta}$ of them. The formalization works directly with the primes in $(2x,5x]$ supplied by (H), at least $x^{1-\delta}$ of them. It uses $k=\floorp{x^{2\delta}}$, smoothness level $x^\delta$, the bound $N^k$ with $N=\floorp{5x}$ for the values, and the explicit choice $\delta=\eta=\varepsilon/8$.
+\item \emph{The value count.} The source uses the bound $(1+k\log X/\log2)^{X^\delta}$. The formalization uses the explicit bound $(\ltwo(N^k)+1)^{\floorp{x^\delta}}$. The statement ``$=X^{o(k)}$'' is replaced by the explicit inequalities of \cref{lem:asymp_log_ineq_growth_logbound,lem:asymp_log_ineq_growth,lem:asymp_log_ineq_pointwise,lem:asymp_main}.
+\item \emph{Unboundedness of $n$.} The source deduces this from the growth of $g(n)$ and finiteness of fibers. The formalization shows directly that $n\ge p_0-1>x$ for some prime $p_0$ in the chosen product (\cref{lem:good_n_from_finset}). Finiteness of fibers (\cref{lem:totient_fiber_finite}) is used only to know that $g(n)$ is a genuine count (\cref{lem:card_le_totientFiberCard}).
+\item \emph{Lemma~1 of the source.} The quantitative bound $g(n)\ll_\eta n^{1+\eta}$ is neither formalized nor needed.
+\item \emph{The hypothesis.} Hypothesis (H), Theorem~1.2 of the source paper, enters as an explicit assumption, as in the problem statement, and is not proved.
+\end{itemize}
+
+\appendix
+\section{Correspondence with the formal proof}
+Each lemma of the text and the Lean declaration that states it; \cref{thm:main} is \texttt{openaimath\_011\_totientfibersfromsmoothshiftedprimes}.
+
+\begin{longtable}{@{}lll@{}}
+\toprule
+Lemma & Lean declaration & Status \\
+\midrule
+\endhead
+\cref{lem:totient_fiber_finite} & \texttt{totient\_fiber\_finite} & verified \\
+\cref{lem:card_le_totientFiberCard} & \texttt{card\_le\_totientFiberCard} & verified \\
+\cref{lem:totient_prod_primes} & \texttt{totient\_prod\_primes} & verified \\
+\cref{lem:prod_primes_inj} & \texttt{prod\_primes\_inj} & verified \\
+\cref{lem:exists_large_fiber} & \texttt{exists\_large\_fiber} & verified \\
+\cref{lem:smooth_count} & \texttt{smooth\_count} & verified \\
+\cref{lem:prod_smooth_bounded} & \texttt{prod\_smooth\_bounded} & verified \\
+\cref{lem:choose_ge_pow_div} & \texttt{choose\_ge\_pow\_div} & verified \\
+\cref{lem:asymp_log_ineq_growth_logbound} & \texttt{asymp\_log\_ineq\_growth\_logbound} & verified \\
+\cref{lem:asymp_log_ineq_growth_eventually} & \texttt{asymp\_log\_ineq\_growth\_eventually} & verified \\
+\cref{lem:asymp_log_ineq_growth} & \texttt{asymp\_log\_ineq\_growth} & verified \\
+\cref{lem:asymp_log_ineq_pointwise} & \texttt{asymp\_log\_ineq\_pointwise} & verified \\
+\cref{lem:asymp_log_ineq} & \texttt{asymp\_log\_ineq} & verified \\
+\cref{lem:asymp_main_lhs_log} & \texttt{asymp\_main\_lhs\_log} & verified \\
+\cref{lem:asymp_main_rhs_log} & \texttt{asymp\_main\_rhs\_log} & verified \\
+\cref{lem:asymp_main} & \texttt{asymp\_main} & verified \\
+\cref{lem:exists_prime_finset} & \texttt{exists\_prime\_finset} & verified \\
+\cref{lem:good_n_from_finset} & \texttt{good\_n\_from\_finset} & verified \\
+\cref{lem:exists_good_n_large} & \texttt{exists\_good\_n\_large} & verified \\
+\cref{lem:infinite_of_lt_one} & \texttt{infinite\_of\_lt\_one} & verified \\
+\bottomrule
+\end{longtable}
+\end{document}
