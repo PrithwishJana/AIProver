@@ -457,6 +457,15 @@ def make_project(root: Path = PROJECT, mathlib: Path = MATHLIB) -> Path:
         dest.unlink()
     if not dest.is_file() and PROBLEM.is_file():
         dest.write_text(PROBLEM.read_text(errors="replace"), encoding="utf-8")
+
+    # The job's fixed context (the run's definitions, setting facts and earlier lemmas) as a
+    # Lean file in the project, where `lean_local_search` and grep find its declarations;
+    # otherwise they exist only as text in problem.txt, and searches for them fail. Reference
+    # only: it is neither imported nor graded (Work.lean copies the context verbatim).
+    context = Path(os.environ.get("AGENT_CONTEXT", "") or "/nonexistent")
+    target = root / "Context.lean"
+    if context.is_file() and not target.is_file():
+        target.write_text(context.read_text(errors="replace"), encoding="utf-8")
     return root
 
 

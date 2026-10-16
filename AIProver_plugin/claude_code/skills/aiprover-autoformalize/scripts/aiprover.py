@@ -1713,6 +1713,8 @@ def run_sample(cfg: Config, jobdir: Path, i: int, req: dict, stop: threading.Eve
                 shutil.rmtree(ws / "proj", ignore_errors=True)
             env = harness_env(cfg, ws, api, model)
             env.update(budget_env(req))
+            # The job's context, placed in the session project as Context.lean (harness).
+            env["AGENT_CONTEXT"] = str(ws.parent / "context.lean")
             if session:
                 env.update(AGENT_RESUME_SESSION=session, AGENT_RESUME_ELAPSED=str(before))
                 (ws / "agent.log").open("a").write(f"\n[aiprover] resuming session {session} "

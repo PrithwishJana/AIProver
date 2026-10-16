@@ -2,9 +2,9 @@
  "champion": "hevo_mixed_v1/d00_r00/d01_r04 (round 4, fitness 0.5375 on 509 train problems: 205 solved, 9 faithful-with-sorry, 173 compile-but-unfaithful)",
  "source": "/home/pjana/runs/hevo_mixed_v1/memory/d00_r00/d01_r04/harness.py",
  "champion_sha256": "1b6fa629087d5ce8a5d005c70f2ca9371a973561a8a09b176ba0c0e62ab3f91b",
- "harness_sha256": "99ca81dd34ee6d5654fdccf2585197f7468dd0742847daf68dcda6c45c80671e",
+ "harness_sha256": "48262f261e1efed1ab4dcad8bf5d2fc6b3a993a8123325aff0e8db550119c6e8",
  "grader_source": "harness_runner/grade_type_correctness.py",
- "grader_sha256": "a0ca0135bcb35d6413be380fc32771b2da3eb2c18058e798f39ae03cde310328",
+ "grader_sha256": "239ad5b90ff3ccc477e3beeaacfa8d5fa8776f7d6ba9b52e50f4fa0ea257a422",
  "model_settings": {
   "temperature": 1.0,
   "reasoning_effort": "high",
@@ -16,7 +16,8 @@
   "cslib_source(): locates the built cslib sources, mirroring mathlib_source().",
   "TASK prompt: the disqualifying-import rule names Cslib, and one ENVIRONMENT bullet describes cslib and how to import/search it -- both only when cslib_source() is not None, so the prompt never names an absent package.",
   "`config` mode prints the resolved cslib path; selftest gains `prompt names cslib iff it is built`.",
-  "Nothing else: loop, tool set, hooks, budgets, model settings and every other line of the prompt are the champion's."
+  "Orchestration hosting fork (commit 5428390): search fences, Lake refusal, self-hosted Lean Finder support.",
+  "make_project: the job's context is written to proj/Context.lean when AGENT_CONTEXT names a file (set by `aiprover` for every session), so search tools find the run's declarations; reference only, neither imported nor graded."
  ],
  "note": "Champion d01_r04 plus the additive deltas listed above (cslib support). Every number quoted for AIProver was measured with the champion bytes (champion_sha256); the deltas add an optional library and change no measured behaviour on Mathlib-only problems. `aiprover doctor` verifies harness_sha256 and grader_sha256."
 }
