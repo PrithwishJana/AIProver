@@ -863,6 +863,11 @@ LOCAL_LEANFINDER_DESCRIPTION = (
     "use grep only for exact text. The version argument is ignored.")
 if LEANFINDER_URL:
     TOOL_DESCRIPTIONS["lean_leanfinder"] = LOCAL_LEANFINDER_DESCRIPTION
+# A grep over the Mathlib sources is answered with the semantic index's results as well
+# (hook_grep_semantic). Measured on an orchestration run (332 sessions): sessions made about
+# two grep calls for every semantic search, and prompt guidance alone did not change that.
+GREP_SEMANTIC_RESULTS = int(os.environ.get("AGENT_GREP_SEMANTIC", "5"))
+GREP_SEMANTIC_TYPE_CHARS = 200
 
 
 def agent_config(api_base: str, *, project: Path = PROJECT,
@@ -2327,6 +2332,56 @@ def hook_sound() -> int:
         sys.stdout = real
 
 
+def grep_semantic_query(tool_input: dict) -> str:
+    """The semantic query for a grep aimed at library sources, else ''.
+
+    A grep is aimed at the library when its path names a package or Mathlib; greps of the
+    session's own files (the answer, Context.lean) get nothing. The regex is reduced to its
+    words and names, which is what the index matches on."""
+    path = str(tool_input.get("path") or "")
+    if not re.search(r"\.lake|[Mm]athlib|[Cc]slib", path):
+        return ""
+    pattern = str(tool_input.get("pattern") or "").replace("\\.", ".")
+    words = re.sub(r"\\[a-zA-Z]|[\\^$|()\[\]{}*+?]|\.\*", " ", pattern)
+    words = " ".join(words.split())
+    return words if len(words) >= 3 else ""
+
+
+def hook_grep_semantic() -> int:
+    """post_tool: append the semantic index's best matches to a grep over the library."""
+    real, sys.stdout = sys.stdout, sys.stderr
+    try:
+        inv = _hook_stdin()
+        url = LEANFINDER_URL or os.environ.get("LEAN_FINDER_URL", "")
+        query = grep_semantic_query(inv.get("tool_input") or {})
+        if not url or not query or GREP_SEMANTIC_RESULTS <= 0:
+            return _hook_reply({"decision": "allow"}, real)
+        import urllib.request
+        request = urllib.request.Request(
+            url.rstrip("/") + "/",
+            data=json.dumps({"inputs": query, "top_k": GREP_SEMANTIC_RESULTS}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=15) as response:
+            results = json.loads(response.read()).get("results") or []
+        lines = [
+            f"- `{r.get('formal_name', '')}` : "
+            + " ".join(str(r.get("type", "")).split())[:GREP_SEMANTIC_TYPE_CHARS]
+            for r in results if r.get("formal_name")]
+        if not lines:
+            return _hook_reply({"decision": "allow"}, real)
+        note = (f"Semantic search of this project's Mathlib for `{query}` "
+                f"(added to the grep automatically):\n" + "\n".join(lines)
+                + f"\nFor a fact you can describe but not name, ask "
+                f"{MCP_ALIAS}_lean_leanfinder in words.")
+        return _hook_reply({"decision": "allow",
+                            "hook_specific_output": {"additional_context": note}}, real)
+    except Exception as e:                          # noqa: BLE001 - fail OPEN, never block
+        print(f"[hook-grep-semantic] {type(e).__name__}: {e}", file=sys.stderr)
+        return _hook_reply({"decision": "allow"}, real)
+    finally:
+        sys.stdout = real
+
+
 def gate_match() -> str:
     """The `match` expression for the pre_tool gate: an anchored alternation of tool names."""
     return "re:(" + "|".join(re.escape(t) for t in GATE_TOOLS) + ")"
@@ -2347,7 +2402,7 @@ def reserve_match() -> str:
 
 
 def hooks_toml(python: str | None = None, script: str | None = None) -> str:
-    """The hooks file, pointing all five hooks back at THIS harness file.
+    """The hooks file, pointing all six hooks back at THIS harness file.
 
     Self-referential on purpose: the harness is staged into a directory whose path it does not
     choose (and which differs between the container and the local-execution shim), so
@@ -2396,6 +2451,14 @@ match = {json.dumps(gate_match())}
 command = "{py} {me} hook-gate"
 timeout = 30.0
 description = "Withhold Mathlib search while no theorem has been written."
+
+[[hooks]]
+name = "grep_semantic"
+type = "post_tool"
+match = "grep"
+command = "{py} {me} hook-grep-semantic"
+timeout = 30.0
+description = "Answer a grep over Mathlib with the semantic index's best matches as well."
 
 [[hooks]]
 name = "answer_verify"
@@ -3638,7 +3701,7 @@ def main() -> int:
                                      # commands named in $VIBE_HOME/hooks.toml. They read the
                                      # invocation from stdin and answer with one JSON object.
                                      "hook-gate", "hook-reserve", "hook-write",
-                                     "hook-sound", "hook-verify"])
+                                     "hook-sound", "hook-verify", "hook-grep-semantic"])
     ap.add_argument("--api-base", default=os.environ.get("AGENT_API_BASE", ""))
     ap.add_argument("--result", type=Path, default=WORK / "result.json")
     ap.add_argument("--no-mcp", action="store_true", help="ablate the LSP tools entirely")
@@ -3657,6 +3720,8 @@ def main() -> int:
         return hook_sound()
     if a.mode == "hook-verify":
         return hook_verify()
+    if a.mode == "hook-grep-semantic":
+        return hook_grep_semantic()
 
     if a.mode == "config":
         ok, msg = check_upstream()
