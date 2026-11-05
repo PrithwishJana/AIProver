@@ -1367,7 +1367,7 @@ def probe_file(cfg: Config, text: str) -> dict:
             status, detail = "untestable", "no sampling/decidability instances for this statement"
         elif any(sev == "error" for _, sev, _ in mine):
             status, detail = "does not elaborate", next(tx.splitlines()[0] for _, sev, tx in mine if sev == "error")[:160]
-        elif "declaration uses 'sorry'" in joined:
+        elif re.search(r"declaration uses ['`]sorry['`]", joined):
             # `plausible` prints "Unable to find a counter-example" WITHOUT a position and then
             # admits the goal, so the positioned trace of a passed test is exactly this warning.
             status, detail = "no counterexample found", "random testing passed; this proves nothing"

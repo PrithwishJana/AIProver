@@ -105,6 +105,8 @@ def lean_path(project: Path | None = None) -> str:
     own = project / ".lake/build/lib/lean"
     if own.is_dir():
         parts.append(str(own))
+    # Built modules a run adds: the orchestration's package library.
+    parts += filter(None, os.environ.get("AIPROVER_EXTRA_LEAN_PATH", "").split(":"))
     if not parts:
         raise RuntimeError(f"no built packages under {MATHLIB}")
     return ":".join(parts)
