@@ -69,6 +69,13 @@ IMPORT_ROOTS = ("Mathlib", "Init", "Std", "Batteries", "Aesop", "Qq", "ImportGra
                 "Cslib")       # pinned dependency of the project, built next to Mathlib
 
 
+def import_roots() -> tuple[str, ...]:
+    """IMPORT_ROOTS and the root modules of a run's package library, whose build lies,
+    read-only, on AIPROVER_EXTRA_LEAN_PATH."""
+    extra = filter(None, os.environ.get("AIPROVER_EXTRA_LEAN_PATH", "").split(":"))
+    return IMPORT_ROOTS + tuple(f.stem for d in extra for f in Path(d).glob("*.olean"))
+
+
 class AIProverError(RuntimeError):
     pass
 
@@ -475,8 +482,9 @@ def check_lean(cfg: Config, text: str, *, statement_only: bool = False,
     if not text.strip():
         return {"verdict": "FAIL", "problems": ["empty file"], "warnings": [],
                 "compiles": False, "complete": False, "axioms": {}, "diagnostics": ""}
+    roots = import_roots()
     for m in _IMPORT.finditer(code):
-        if m.group(1).split(".")[0] not in IMPORT_ROOTS:
+        if m.group(1).split(".")[0] not in roots:
             problems.append(f"imports `{m.group(1)}`: the answer must be self-contained "
                             f"(Mathlib/Std/Batteries/Aesop/Cslib/... only)")
     for rx, why in _DISQ:

@@ -2,7 +2,7 @@
  "champion": "hevo_mixed_v1/d00_r00/d01_r04 (round 4, fitness 0.5375 on 509 train problems: 205 solved, 9 faithful-with-sorry, 173 compile-but-unfaithful)",
  "source": "/home/pjana/runs/hevo_mixed_v1/memory/d00_r00/d01_r04/harness.py",
  "champion_sha256": "1b6fa629087d5ce8a5d005c70f2ca9371a973561a8a09b176ba0c0e62ab3f91b",
- "harness_sha256": "f1cdf985acb865066c53da42371c9b82dbaf0650f792f36674a250acaa7ddb1b",
+ "harness_sha256": "6f75eeada1bb1f354a2823839e71704913513e50ce428a4c2d46f20dd50cee22",
  "grader_source": "harness_runner/grade_type_correctness.py",
  "grader_sha256": "239ad5b90ff3ccc477e3beeaacfa8d5fa8776f7d6ba9b52e50f4fa0ea257a422",
  "model_settings": {

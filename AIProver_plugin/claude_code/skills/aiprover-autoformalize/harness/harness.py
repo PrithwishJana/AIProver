@@ -2257,6 +2257,13 @@ IMPORT_ROOTS = ("Mathlib", "Init", "Std", "Batteries", "Aesop", "Qq", "ImportGra
 _IMPORT_LINE = re.compile(r"^\s*import\s+([A-Za-z_][\w.]*)", re.M)
 
 
+def import_roots() -> tuple[str, ...]:
+    """IMPORT_ROOTS and the root modules of a run's package library, whose build lies,
+    read-only, on AIPROVER_EXTRA_LEAN_PATH."""
+    extra = filter(None, os.environ.get("AIPROVER_EXTRA_LEAN_PATH", "").split(":"))
+    return IMPORT_ROOTS + tuple(f.stem for d in extra for f in Path(d).glob("*.olean"))
+
+
 def disqualifier(text: str) -> str | None:
     """Why this Lean would be thrown out whatever the compiler says, or None.
 
@@ -2270,10 +2277,11 @@ def disqualifier(text: str) -> str | None:
     for pat, why in DISQUALIFIERS:
         if pat.search(text):
             return why
+    roots = import_roots()
     for m in _IMPORT_LINE.finditer(text):
-        if m.group(1).split(".")[0] not in IMPORT_ROOTS:
+        if m.group(1).split(".")[0] not in roots:
             return (f"imports {m.group(1)!r}, which is outside the allowed roots "
-                    f"{list(IMPORT_ROOTS)}")
+                    f"{list(roots)}")
     return None
 
 
@@ -3536,6 +3544,17 @@ def selftest(api_base: str = "unused") -> int:
         "import Mathlib\nset_option maxHeartbeats 0 in\ntheorem t : True := trivial\n"))
     checks["soundness guard catches a foreign import"] = bool(disqualifier(
         "import MyOwnModule\ntheorem t : True := trivial\n"))
+    package = WORK / "selftest_package"
+    package.mkdir(exist_ok=True)
+    (package / "MyOwnModule.olean").touch()
+    saved = os.environ.get("AIPROVER_EXTRA_LEAN_PATH")
+    os.environ["AIPROVER_EXTRA_LEAN_PATH"] = str(package)
+    checks["soundness guard passes a package library's import"] = disqualifier(
+        "import MyOwnModule\ntheorem t : True := trivial\n") is None
+    os.environ.pop("AIPROVER_EXTRA_LEAN_PATH")
+    if saved is not None:
+        os.environ["AIPROVER_EXTRA_LEAN_PATH"] = saved
+    shutil.rmtree(package)
     checks["soundness guard passes ordinary Lean"] = disqualifier(
         "import Mathlib.Data.Nat.Basic\nset_option maxHeartbeats 400000 in\n"
         "theorem t (n : Nat) : n + 0 = n := by simp\n") is None
