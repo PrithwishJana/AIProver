@@ -55,7 +55,9 @@ MODEL = {
     "model_id": os.environ.get("AGENT_MODEL", "mistralai/Leanstral-1.5-119B-A6B"),
     "temperature": float(os.environ.get("AGENT_TEMPERATURE", "1.0")),   # LEAN: temperature
     "reasoning_effort": os.environ.get("AGENT_THINKING", "high"),       # LEAN: thinking
-    "max_context": 200_000,                          # LEAN: auto_compact_threshold
+    # LEAN: auto_compact_threshold. AGENT_MAX_CONTEXT lowers it for a server with a
+    # shorter context (vLLM --max-model-len), which history must be compacted below.
+    "max_context": int(os.environ.get("AGENT_MAX_CONTEXT", "200000")),
     # 100 -- the operator ceiling -- raised from 90, together with the landing policy in
     # section 5e, and the two are one change rather than two.
     #
